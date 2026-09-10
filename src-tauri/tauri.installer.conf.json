@@ -1,0 +1,22 @@
+{
+  "bundle": {
+    "active": true,
+    "targets": ["nsis"],
+    "shortDescription": "A local music studio powered by YuE2",
+    "resources": { "../build/installer/payload/": "" },
+    "icon": ["icons/icon.ico"],
+    "windows": {
+      "webviewInstallMode": { "type": "downloadBootstrapper", "silent": true },
+      "nsis": {
+        "installMode": "currentUser",
+        "displayLanguageSelector": false,
+        "languages": ["English"],
+        "sidebarImage": "../installer/art/sidebar.bmp",
+        "headerImage": "../installer/art/header.bmp",
+        "installerIcon": "icons/icon.ico",
+        "installerHooks": "../installer/hooks.nsh",
+        "startMenuFolder": "YuE2 Studio"
+      }
+    }
+  }
+}

@@ -1,0 +1,27 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "YuE2 Studio",
+  "version": "0.4.0",
+  "identifier": "com.thekraken.yue2studio",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://localhost:1434",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [{
+      "title": "YuE2 Studio",
+      "width": 1540,
+      "height": 960,
+      "minWidth": 1180,
+      "minHeight": 720,
+      "decorations": true,
+      "resizable": true,
+      "dragDropEnabled": true,
+      "backgroundColor": "#06121C"
+    }],
+    "security": { "csp": null }
+  },
+  "bundle": { "active": false, "targets": ["nsis"] }
+}

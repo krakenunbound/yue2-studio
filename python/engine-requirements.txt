@@ -1,0 +1,9 @@
+# Core inference versions are pinned by the local yue2-infer 0.1.5 wheel.
+# Shared studio tools retained from the source app.
+diffusers==0.37.0
+pillow
+scipy
+psutil
+einops
+demucs==4.0.1
+omegaconf

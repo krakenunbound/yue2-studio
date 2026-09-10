@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Video Studio</title>
+    <link rel="stylesheet" href="/video-studio-static/video_studio.css">
+</head>
+<body>
+    <main class="video-shell">
+        <aside class="control-panel">
+            <div class="panel-head">
+                <div>
+                    <p class="eyebrow">Video Studio</p>
+                    <h1>Visualizer</h1>
+                </div>
+                <span class="back-link">YuE2 Studio</span>
+            </div>
+
+            <section class="card track-card">
+                <div class="card-title">Track</div>
+                <div class="track-header">
+                    <div class="track-heading">
+                        <div class="track-title" id="track-title">Selected song</div>
+                        <div class="track-workspace" id="track-workspace">Workspace details will appear here.</div>
+                    </div>
+                    <div class="track-format-pill" id="track-format-pill">16:9</div>
+                </div>
+                <div class="track-meta-grid track-meta-compact">
+                    <div class="meta-chip">
+                        <span>Length</span>
+                        <strong id="track-length">--</strong>
+                    </div>
+                </div>
+                <div class="status" id="load-status">Loading audio...</div>
+            </section>
+
+            <section class="card">
+                <div class="card-title">Canvas Format</div>
+                <div class="toggle-row">
+                    <button class="toggle active" id="ratio-landscape" type="button">16:9</button>
+                    <button class="toggle" id="ratio-portrait" type="button">9:16</button>
+                </div>
+                <div class="format-meta">
+                    <div class="format-pill" id="format-label">Landscape</div>
+                    <div class="format-resolution mono" id="format-resolution">1280 x 720 render canvas</div>
+                </div>
+                <div class="status" id="format-status">Landscape works for YouTube, Rumble, and X. Portrait works for TikTok, Reels, and Shorts.</div>
+            </section>
+
+            <section class="card">
+                <div class="card-title">Preset</div>
+                <div class="preset-grid">
+                    <button class="preset active" data-preset="orbit" type="button">Orbit</button>
+                    <button class="preset" data-preset="bars" type="button">Bars</button>
+                    <button class="preset" data-preset="pulse" type="button">Pulse</button>
+                    <button class="preset" data-preset="wave" type="button">Wave</button>
+                </div>
+            </section>
+
+            <section class="card">
+                <div class="card-title">Background</div>
+                <div class="toggle-row">
+                    <button class="toggle active" id="bg-random" type="button">Random</button>
+                    <button class="toggle" id="bg-image" type="button">Image</button>
+                    <button class="toggle" id="bg-video" type="button">Video</button>
+                </div>
+                <div class="field-row">
+                    <button id="upload-image" class="secondary" type="button">Upload Image</button>
+                    <button id="upload-video" class="secondary" type="button">Upload Video</button>
+                </div>
+                <label class="range-field">
+                    <span>Dimming</span>
+                    <input id="bg-dim" type="range" min="0" max="100" value="58">
+                </label>
+            </section>
+
+            <section class="card">
+                <div class="card-title">Color</div>
+                <div class="swatch-grid">
+                    <button class="swatch active" data-primary="#a855f7" data-secondary="#22d3ee" style="--swatch-a:#a855f7; --swatch-b:#22d3ee;" type="button"></button>
+                    <button class="swatch" data-primary="#ff8a20" data-secondary="#ff4d95" style="--swatch-a:#ff8a20; --swatch-b:#ff4d95;" type="button"></button>
+                    <button class="swatch" data-primary="#38bdf8" data-secondary="#6366f1" style="--swatch-a:#38bdf8; --swatch-b:#6366f1;" type="button"></button>
+                    <button class="swatch" data-primary="#facc15" data-secondary="#fb7185" style="--swatch-a:#facc15; --swatch-b:#fb7185;" type="button"></button>
+                    <button class="swatch" data-primary="#a855f7" data-secondary="#ec4899" style="--swatch-a:#a855f7; --swatch-b:#ec4899;" type="button"></button>
+                    <button class="swatch" data-primary="#e5e7eb" data-secondary="#94a3b8" style="--swatch-a:#e5e7eb; --swatch-b:#94a3b8;" type="button"></button>
+                </div>
+                <div class="field-row">
+                    <label class="color-field">
+                        <span>Primary</span>
+                        <input id="primary-color" type="color" value="#a855f7">
+                    </label>
+                    <label class="color-field">
+                        <span>Secondary</span>
+                        <input id="secondary-color" type="color" value="#22d3ee">
+                    </label>
+                </div>
+            </section>
+
+            <section class="card">
+                <div class="card-title">Particles</div>
+                <div class="preset-grid particle-grid">
+                    <button class="preset active" data-particle="dust" type="button">Dust</button>
+                    <button class="preset" data-particle="rain" type="button">Rain</button>
+                    <button class="preset" data-particle="stars" type="button">Stars</button>
+                    <button class="preset" data-particle="embers" type="button">Embers</button>
+                    <button class="preset" data-particle="warp" type="button">Warp</button>
+                    <button class="preset" data-particle="sparks" type="button">Sparks</button>
+                </div>
+                <label class="range-field">
+                    <span>Amount</span>
+                    <input id="particle-count" type="range" min="0" max="180" value="64">
+                </label>
+                <div class="status" id="particle-status">Floating dust motes. Rain, stars, embers, warp, and sparks come from the Kraken Radio canvas effects.</div>
+            </section>
+
+            <section class="card">
+                <div class="card-title">Lyrics Overlay</div>
+                <div class="toggle-row">
+                    <button class="toggle active" id="lyrics-on" type="button">On</button>
+                    <button class="toggle" id="lyrics-off" type="button">Off</button>
+                </div>
+                <div class="status" id="lyrics-status">No timed lyrics were loaded for this song yet.</div>
+                <div class="field-row">
+                    <button id="sync-lyrics" class="secondary" type="button">Sync Lyrics</button>
+                </div>
+            </section>
+
+            <section class="card">
+                <div class="card-title">Local Cover Art</div>
+                <div class="status" id="cover-status">Saved cover art is loading.</div>
+                <div class="toggle-row">
+                    <button class="toggle active" id="center-image-on" type="button">Cover</button>
+                    <button class="toggle" id="center-image-off" type="button">None</button>
+                </div>
+                <div class="status" id="center-image-status">Circular cover sits in the visualizer. None leaves the center open.</div>
+                <div class="field-row">
+                    <button id="generate-cover" class="primary" type="button">Generate Cover</button>
+                    <button id="use-cover-background" class="secondary" type="button">Use As Background</button>
+                </div>
+            </section>
+
+            <section class="card">
+                <div class="card-title">Render</div>
+                <div class="field-row">
+                    <button id="render-video" class="primary" type="button">Render Video (MP4)</button>
+                    <button id="render-cancel" class="danger" type="button" hidden>Cancel</button>
+                    <button id="download-frame" class="secondary" type="button">Save Frame</button>
+                </div>
+                <div class="status mono" id="render-status">Ready.</div>
+            </section>
+
+            <input id="image-input" type="file" accept="image/*" hidden>
+            <input id="video-input" type="file" accept="video/*" hidden>
+        </aside>
+
+        <section class="preview-panel">
+            <div class="preview-head">
+                <div>
+                    <p class="eyebrow">Preview</p>
+                    <div class="preview-title" id="preview-format-title">Landscape Preview</div>
+                </div>
+                <div class="preview-copy" id="preview-format-copy">16:9 framing for YouTube, Rumble, and X.</div>
+            </div>
+
+            <div id="preview-stage" class="preview-stage" data-aspect="landscape">
+                <canvas id="visualizer-canvas" width="1280" height="720"></canvas>
+            </div>
+
+            <div class="transport">
+                <button id="play-toggle" class="transport-button primary" type="button">Play</button>
+                <span id="time-current" class="mono">0:00</span>
+                <input id="seek" type="range" min="0" max="100" value="0">
+                <span id="time-total" class="mono">0:00</span>
+                <label class="volume-wrap">
+                    <span>Volume</span>
+                    <input id="volume" type="range" min="0" max="1" step="0.01" value="0.85">
+                </label>
+            </div>
+        </section>
+    </main>
+
+    <audio id="source-audio" crossorigin="anonymous" preload="metadata"></audio>
+    <script src="/video-studio-static/video_studio.js?v=20260829-portrait-bars"></script>
+</body>
+</html>

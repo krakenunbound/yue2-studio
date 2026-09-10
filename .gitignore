@@ -1,0 +1,62 @@
+# Dependencies and build
+node_modules/
+dist/
+src-tauri/target/
+
+# Python runtimes (installed by Setup, not source)
+python/venv/
+python/runtime/
+python/lyrics_runtime/
+python/sfx_runtime/
+python/_runtime_probe/
+python/vendor/ComfyUI/
+python/**/__pycache__/
+*.pyc
+.cache/
+huggingface/
+
+# Local library, logs, mixes, and the API-key vault
+outputs/
+outputs/settings/
+**/api-keys.json
+
+# Secrets — never GitHub
+.env
+.env.*
+!.env.example
+*.pem
+*.p12
+*credentials*
+*secret*
+*API*.txt
+Google Gemini API.txt
+# vault filename only — do not ignore docs/api-keys.md
+
+# Model weights and checkpoints (Setup downloads these)
+models/
+**/*.safetensors
+**/*.gguf
+**/*.ckpt
+**/*.onnx
+**/*.pth
+**/*.pt
+**/*.th
+
+# Logs and scratch
+*.log
+*.tmp
+*.bak
+
+# Installer staging, packages and validation installs
+build/
+release/
+
+# Local tooling and distributables
+.playwright-mcp/
+.pytest_cache/
+YuE2 Studio.exe
+*.sha256
+python/standalone/
+tools/
+
+src-tauri/gen/
