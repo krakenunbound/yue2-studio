@@ -2,6 +2,10 @@
 
 YuE2 Studio is a native Windows desktop application for writing, generating, arranging and exporting music with the local [YuE2-3B](https://huggingface.co/m-a-p/YuE2-3B) model. It has a song library, lyric synchronization, cover art, stem separation, video tools and optional local sound effects. The application runs on your computer; no music-generation account is required.
 
+## Start here
+
+Read the [complete user guide](USER_GUIDE.md) for first-run setup, model choices, song and sound prompting, Studio editing, combining tracks, exports, troubleshooting and backups.
+
 ## Gallery
 
 ![Create a song in Easy mode](docs/screenshots/v0.4.0/01-create-easy.png)
@@ -24,7 +28,7 @@ To build a local copy from source on Windows:
 2. Run [`Setup YuE2 Studio.bat`](Setup%20YuE2%20Studio.bat).
 3. Launch `YuE2 Studio.exe`, open **Models**, and select the features you want. The app checks free space, reports progress, verifies downloads and keeps optional features separate.
 
-The source setup creates `outputs`, `models`, and its private backend environment. It does not download model weights, tokenizers, checkpoints, or feature runtimes. Those are installed only after you choose them in the app. Music generation needs an NVIDIA GPU with BF16 support; YuE2-3B is intended for a 24 GB card. Cover art also uses an NVIDIA GPU. Other optional features have their own requirements and are shown in Models.
+The source setup creates `outputs`, `models`, and its private backend environment. It does not download model weights, tokenizers, checkpoints, or feature runtimes. Those are installed only after you choose them in the app. Music generation needs an NVIDIA GPU with BF16 support; This app has been used on an RTX 3090 with 24 GB VRAM; smaller cards and longer jobs are not guaranteed to fit. Cover art also uses an NVIDIA GPU. Other optional features have their own requirements and are shown in Models.
 
 To create the distributable Windows installer from a source checkout, run:
 

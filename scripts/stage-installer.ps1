@@ -115,7 +115,7 @@ if (-not $SkipBackendDependencies) {
     Copy-Item -LiteralPath $FfmpegSource -Destination (Join-Path $ToolsDirectory 'ffmpeg.exe') -Force
 }
 
-foreach ($File in @('README.md', 'LICENSE', 'THIRD_PARTY_NOTICES.md', 'APP_THIRD_PARTY_NOTICES.md')) {
+foreach ($File in @('README.md', 'USER_GUIDE.md', 'LICENSE', 'THIRD_PARTY_NOTICES.md', 'APP_THIRD_PARTY_NOTICES.md')) {
     $Source = Join-Path $ProjectRoot $File
     if (Test-Path -LiteralPath $Source) { Copy-Item -LiteralPath $Source -Destination $StageRoot -Force }
 }
