@@ -1,0 +1,29 @@
+{
+  "archives": [
+    {
+      "path": "outputs/downloads/woosh/Woosh-Flow.zip",
+      "bytes": 1253883744,
+      "sha256": "f748c70972798ca09f98fe49e505e700ccfe4d38b3b12b955a06cb89aa0e024c",
+      "url": "https://github.com/SonyResearch/Woosh/releases/download/v1.0.0/Woosh-Flow.zip"
+    },
+    {
+      "path": "outputs/downloads/woosh/Woosh-AE.zip",
+      "bytes": 822991075,
+      "sha256": "d6f77e3792ee43c21da580f39d6576e0da3e4b46b949223259adf36036c1f9af",
+      "url": "https://github.com/SonyResearch/Woosh/releases/download/v1.0.0/Woosh-AE.zip"
+    },
+    {
+      "path": "outputs/downloads/woosh/TextConditionerA.zip",
+      "bytes": 1297121262,
+      "sha256": "68a777b9ac28aa5daf6017b21af9a3659de75074ea14dac65f5231a42c375193",
+      "url": "https://github.com/SonyResearch/Woosh/releases/download/v1.0.0/TextConditionerA.zip"
+    }
+  ],
+  "source": {
+    "path": "outputs/downloads/woosh/source.zip",
+    "bytes": 803933,
+    "sha256": "134d9e746b697c382ab44d981648011d746df5529c35fb98d18a5c2a80bcaa69",
+    "url": "https://codeload.github.com/SonyResearch/Woosh/zip/88006c57774a85bede9f87733c019664410d6f4e"
+  },
+  "revision": "88006c57774a85bede9f87733c019664410d6f4e"
+}

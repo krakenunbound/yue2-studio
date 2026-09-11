@@ -33,6 +33,9 @@ def main() -> None:
     parser.add_argument("--negative-prompt", default="")
     parser.add_argument("--duration", type=float, required=True)
     parser.add_argument("--seed", type=int, required=True)
+    parser.add_argument("--steps", type=int, default=8, choices=range(1, 101))
+    parser.add_argument("--sampler", choices=("pingpong", "euler", "rk4", "dpmpp"), default="pingpong")
+    parser.add_argument("--full-decode", action="store_true")
     args = parser.parse_args()
 
     # The Studio is intentionally offline at generation time. The gated model
@@ -67,22 +70,21 @@ def main() -> None:
     progress(0.38, "Creating sound effect", 0.0)
     audio = model.generate(
         prompt=args.prompt,
-        negative_prompt=args.negative_prompt or None,
         duration=args.duration,
         seed=args.seed,
-        steps=8,
+        steps=args.steps,
         cfg_scale=1.0,
-        sampler_type="pingpong",
-        chunked_decode=True,
+        sampler_type=args.sampler,
+        chunked_decode=not args.full_decode,
     )
     progress(0.90, "Saving generated sound", 1.0)
     rendered = audio[0].detach().to(torch.float32).cpu()
     peak = rendered.abs().max()
-    if peak > 1e-8:
+    if peak > 0.95:
         rendered = (rendered / peak * 0.95).clamp(-1, 1)
     data = rendered.numpy().T
     output.parent.mkdir(parents=True, exist_ok=True)
-    sf.write(output, data, int(model_config["sample_rate"]), subtype="PCM_16")
+    sf.write(output, data, int(model_config["sample_rate"]), subtype="PCM_24")
     progress(0.98, "Adding sound to Studio", 1.0)
 
 

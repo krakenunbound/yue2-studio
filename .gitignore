@@ -59,4 +59,10 @@ YuE2 Studio.exe
 python/standalone/
 tools/
 
-src-tauri/gen/
+# Optional Woosh installation
+python/woosh_runtime/
+python/vendor/Woosh/
+
+YuE2 Studio Updated.exe
+python/model_install_tools/
+python/managed/

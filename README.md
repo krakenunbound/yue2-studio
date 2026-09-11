@@ -47,11 +47,19 @@ npm run build
 npm run tauri build -- --no-bundle
 ```
 
-The project version is 0.4.0.
+The project version is 0.5.0.
 
 ## Licenses and upstream work
 
 YuE2 Studio uses the published YuE2-3B inference package and model. Each model download retains its upstream license and may have additional terms. In particular, Stable Audio 3 requires accepting its Hugging Face access terms before it can be downloaded. See [LICENSE](LICENSE), [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md), and [APP_THIRD_PARTY_NOTICES.md](APP_THIRD_PARTY_NOTICES.md).
 
 
-[View the complete 22-screen app tour](docs/screenshots/v0.4.0/README.md).
+## New in 0.5.0
+
+- Sony Woosh-Flow joins Stable Audio in Effects. Select the engine, use a simple prompt, and adjust CFG or sampling. Woosh produces up to five seconds of mono audio played through both speakers. Its weights use CC-BY-NC (non-commercial).
+- Models includes an optional Woosh installer with verified downloads, free-space checks, cancellation, tokenizer files, and a private Python 3.12/CUDA runtime. Already installed features stay hidden. All existing music, lyrics, artwork, stem and Stable Audio installers remain available.
+- Studio plays imported mono audio through both ears and exports it to both channels.
+- Combine sound tracks merges selected imported lanes with their timing and rendered edits. Restore original tracks brings back their pre-combine state; edits to the combined lane are discarded when restoring.
+- Effects includes optional Gemini prompt assistance and model-specific sampling controls. Short, simple prompts are recommended for Woosh.
+
+Model weights, private runtimes, API keys and personal media are not bundled in the source or installer.

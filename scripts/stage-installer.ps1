@@ -75,7 +75,7 @@ $PythonStage = Join-Path $StageRoot 'python'
 New-Item -ItemType Directory -Force -Path $PythonStage | Out-Null
 Get-ChildItem -LiteralPath (Join-Path $ProjectRoot 'python') -File -Filter '*.py' |
     Copy-Item -Destination $PythonStage -Force
-foreach ($File in @('requirements.txt', 'engine-requirements.txt', 'model_catalog.json')) {
+foreach ($File in @('requirements.txt', 'engine-requirements.txt', 'model_catalog.json', 'woosh_downloads.json')) {
     Copy-Item -LiteralPath (Join-Path $ProjectRoot "python\$File") -Destination $PythonStage -Force
 }
 foreach ($Directory in @('caption_library', 'cover_art', 'video_studio')) {

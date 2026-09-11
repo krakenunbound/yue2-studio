@@ -86,7 +86,7 @@ export type StudioEffectRegion = StudioRange & {
 export type StudioClip = { id: string; start: number; source_in: number; source_out: number | null; fade_in: number; fade_out: number; gain?: number; gain_left?: number; gain_right?: number };
 export type StudioTrackState = { name: string; gain: number; muted: boolean; solo: boolean; offset?: number; trim_start?: number; trim_end?: number | null; fade_in?: number; fade_out?: number; cuts?: StudioRange[]; effects?: StudioEffectRegion[]; clips?: StudioClip[]; use_clips?: boolean };
 export type StudioSession = { tracks: StudioTrackState[]; updated_at?: string };
-export type StudioImport = { file: string; name: string; original?: string; duration?: number; effect_id?: string };
+export type StudioImport = { file: string; name: string; original?: string; duration?: number; effect_id?: string; combined_sources?: StudioImport[] };
 export type SoundEffect = { id: string; name: string; prompt: string; negative_prompt?: string; duration: number; seed: number | null; created_at: string; url: string };
 export type Playlist = { id: string; name: string; song_ids: string[]; created_at: string };
 export type Workspace = { id: string; name: string; song_ids: string[]; created_at: string };
@@ -111,7 +111,8 @@ export type AiKeysView = {
   providers: Record<string, AiProviderPublic>;
   capabilities: Record<string, AiCapabilityState>;
 };
-export type Status = { model: ModelStatus; cover_art: CoverArtStatus; stems: UtilityStatus; sound_effects: UtilityStatus & { runtime_ready?: boolean; processor?: string; size_bytes?: number; present?: number; required?: number }; lyrics_sync: UtilityStatus; exports: UtilityStatus; service: ServiceStatus; gpu: GpuStatus; ai?: Record<string, AiCapabilityStatus>; jobs: Job[] };
+export type SoundEffectsEngineStatus = UtilityStatus & { runtime_ready?: boolean; processor?: string; size_bytes?: number; present?: number; required?: number; max_duration?: number };
+export type Status = { model: ModelStatus; cover_art: CoverArtStatus; stems: UtilityStatus; sound_effects: SoundEffectsEngineStatus & { models?: { stable: SoundEffectsEngineStatus; woosh: SoundEffectsEngineStatus } }; lyrics_sync: UtilityStatus; exports: UtilityStatus; service: ServiceStatus; gpu: GpuStatus; ai?: Record<string, AiCapabilityStatus>; jobs: Job[] };
 export type LogEntry = { id: number; ts: number; level: string; logger: string; message: string };
 export type ModelInstallStatus = { status: "idle" | "running" | "succeeded" | "failed" | "cancelled"; phase: string; progress: number; error?: string | null };
 export type DownloadableModel = {
@@ -131,7 +132,7 @@ export const getAiKeys = () => request<AiKeysView>("/api/settings/ai-keys");
 export const saveAiKeys = (body: { providers?: Record<string, { key?: string; clear?: boolean }>; capabilities?: Record<string, { enabled?: boolean; provider?: string; model?: string }> }) => request<AiKeysView>("/api/settings/ai-keys", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 export type ChatMessage = { role: "user" | "assistant"; content: string };
 export const assistChat = (body: { messages: ChatMessage[]; language?: string; instrumental?: boolean }) => request<{ reply: string; brief: string; ready: boolean }>("/api/assist/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-export const assistWriting = (body: { action: "generate" | "optimize" | "title" | "describe" | "compose"; idea?: string; random?: boolean; title?: string; description?: string; lyrics?: string; language?: string; instrumental?: boolean }) => request<{ lyrics?: string; title?: string; description?: string; references?: string }>("/api/assist/writing", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+export const assistWriting = (body: { action: "generate" | "optimize" | "title" | "describe" | "compose" | "effect"; idea?: string; random?: boolean; title?: string; description?: string; lyrics?: string; language?: string; instrumental?: boolean; effect_engine?: "stable" | "woosh" }) => request<{ lyrics?: string; title?: string; description?: string; references?: string }>("/api/assist/writing", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 export const getVoiceProfiles = (archived = true) => request<{ items: VoiceProfile[] }>(`/api/voices?archived=${archived ? "true" : "false"}`);
 export const createVoiceProfile = (body: Partial<VoiceProfile>) => request<{ profile: VoiceProfile }>("/api/voices", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 export const updateVoiceProfile = (id: string, body: Partial<VoiceProfile>) => request<{ profile: VoiceProfile }>(`/api/voices/${encodeURIComponent(id)}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
@@ -161,9 +162,9 @@ export const extractStems = (folder: string, mode: "2" | "4") => request<{ job: 
 export const saveStudioSession = (folder: string, tracks: StudioTrackState[]) => request<{ saved: boolean }>(`/api/library/${encodeURIComponent(folder)}/studio`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ tracks }) });
 export const bounceStudioMix = (folder: string, tracks: StudioTrackState[], variant: "custom" | "instrumental" | "acapella", selection?: StudioRange | null, contentEnd?: number) => request<{ download_url: string; filename: string; promoted?: boolean; exported?: boolean; exported_folder?: string; exported_title?: string; audio_url?: string; original_audio_url?: string }>(`/api/library/${encodeURIComponent(folder)}/studio/bounce`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ tracks, variant, selection, content_end: contentEnd ?? null }) });
 export const importStudioTrack = async (folder: string, file: File) => request<{ file: string; name: string; url: string }>(`/api/library/${encodeURIComponent(folder)}/studio/import?filename=${encodeURIComponent(file.name)}`, { method: "POST", headers: { "Content-Type": file.type || "application/octet-stream" }, body: file });
-export const generateStudioSound = (folder: string, body: { prompt: string; name?: string; negative_prompt?: string; duration: number; seed?: number | null }) => request<{ job: Job }>(`/api/library/${encodeURIComponent(folder)}/studio/generate-sfx`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+export const generateStudioSound = (folder: string, body: { prompt: string; name?: string; negative_prompt?: string; duration: number; steps?: number; sampler?: string; chunked_decode?: boolean; engine?: "stable" | "woosh"; cfg?: number; seed?: number | null }) => request<{ job: Job }>(`/api/library/${encodeURIComponent(folder)}/studio/generate-sfx`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 export const getEffects = () => request<{ items: SoundEffect[] }>("/api/effects");
-export const generateEffect = (body: { prompt: string; name?: string; negative_prompt?: string; duration: number; seed?: number | null }) => request<{ job: Job }>("/api/effects/generate", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+export const generateEffect = (body: { prompt: string; name?: string; negative_prompt?: string; duration: number; steps?: number; sampler?: string; chunked_decode?: boolean; engine?: "stable" | "woosh"; cfg?: number; seed?: number | null }) => request<{ job: Job }>("/api/effects/generate", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 export const addEffectToStudio = (effectId: string, folder: string) => request<{ file: string; name: string; url: string; duration?: number }>(`/api/effects/${encodeURIComponent(effectId)}/add-to-studio/${encodeURIComponent(folder)}`, { method: "POST" });
 export const deleteEffect = (effectId: string) => request<{ deleted: boolean }>(`/api/effects/${encodeURIComponent(effectId)}`, { method: "DELETE" });
 export const removeStudioTrack = (folder: string, filename: string) => request<{ removed: boolean }>(`/api/library/${encodeURIComponent(folder)}/studio/tracks/${encodeURIComponent(filename)}`, { method: "DELETE" });
@@ -192,3 +193,7 @@ export async function videoStudioUrl(song: Song, workspace: string): Promise<str
   });
   return `${origin}/video-studio?${query.toString()}`;
 }
+
+export type StudioCombineResult = { imports: StudioImport[]; tracks: StudioTrackState[]; removed: string[] };
+export const combineStudioTracks = (folder: string, tracks: StudioTrackState[], files: string[], name: string) => request<StudioCombineResult>(`/api/library/${encodeURIComponent(folder)}/studio/combine`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ tracks, files, name }) });
+export const uncombineStudioTracks = (folder: string, filename: string, tracks: StudioTrackState[]) => request<StudioCombineResult>(`/api/library/${encodeURIComponent(folder)}/studio/uncombine/${encodeURIComponent(filename)}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ tracks }) });

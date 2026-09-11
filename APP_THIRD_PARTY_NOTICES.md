@@ -14,3 +14,7 @@ YuE2 Studio uses the following third-party components. The Windows installer inc
 YuE2, Whisper, Stable Diffusion and Stable Audio downloads retain their respective publishers' terms. Downloading Stable Audio requires publisher access. No Gemini key, Hugging Face token, personal library, or developer settings are included in the installer.
 
 This document is a navigation aid, not a replacement for the component's upstream license terms.
+
+## Sony Woosh (optional download)
+
+Source: https://github.com/SonyResearch/Woosh . Model weights: CC-BY-NC; upstream code includes MIT and Apache-2.0 components. The installer downloads the pinned source and retains its LICENSE files. Weights are not included in this application distribution.

@@ -3,10 +3,10 @@
  * on a workspace longer than the source song; exports still stop at last audio.
  */
 import { Component, useEffect, useMemo, useRef, useState, type ErrorInfo, type ReactNode } from "react";
-import { addEffectToStudio, audioUrl, bounceStudioMix, cancelJob, downloadUrl, generateStudioSound, getEffects, getJob, importStudioTrack, removeStudioTrack, saveStudioSession, type Job, type Song, type SoundEffect, type StudioEffectKind, type StudioEffectRegion, type StudioRange, type StudioTrackState } from "./api";
+import { combineStudioTracks, uncombineStudioTracks, type StudioCombineResult, addEffectToStudio, audioUrl, bounceStudioMix, cancelJob, downloadUrl, generateStudioSound, getEffects, getJob, importStudioTrack, removeStudioTrack, saveStudioSession, type Job, type Song, type SoundEffect, type StudioEffectKind, type StudioEffectRegion, type StudioRange, type StudioTrackState } from "./api";
 import { CLIP_GAIN_MAX, MIN_WORKSPACE_SECONDS, clipAtTime, clipChannelGain, clipEnd, clipGain, clipLength, clockFine, cosineGain, ensureClips, fadeFactor, fitClipToSource, gainToLinePercent, insertSpace, lastClipEnd, rippleDelete, linePercentToGain, makeClip, slicePeaks, sourceTimeAt, splitClipsAt, splitOutRanges, stackEffects, tickStep, workspaceDuration, type StudioClip } from "./studioClips";
 
-type Track = { id: string; name: string; file: string; url: string; color: string; reference?: boolean; imported?: boolean; duration?: number };
+type Track = { id: string; name: string; file: string; url: string; color: string; reference?: boolean; imported?: boolean; combined?: boolean; duration?: number };
 type TrackGraph = { source: MediaElementAudioSourceNode; gainL: GainNode; gainR: GainNode; crossL: GainNode; crossR: GainNode; lowPass: BiquadFilterNode; highPass: BiquadFilterNode; low: BiquadFilterNode; mid: BiquadFilterNode; high: BiquadFilterNode; saturator: WaveShaperNode; saturationAmount: number; compressor: DynamicsCompressorNode; output: GainNode; echoDelay: DelayNode; echoFeedback: GainNode; echoWet: GainNode; reverb: ConvolverNode; reverbWet: GainNode };
 type Tool = "select" | "razor" | "range";
 // Longest ease at an effect edge. Short enough to stay musical, long enough
@@ -189,6 +189,9 @@ function SongStudioView({ song, mixUrl, stemJob, stemsReady, soundEffectsReady, 
   const [message, setMessage] = useState("");
   const [saving, setSaving] = useState(false);
   const [sourceChooser, setSourceChooser] = useState(false);
+  const [combineOpen, setCombineOpen] = useState(false);
+  const [combineIds, setCombineIds] = useState<string[]>([]);
+  const [combineName, setCombineName] = useState("Combined sounds");
   const [soundDialog, setSoundDialog] = useState(false);
   const [soundPrompt, setSoundPrompt] = useState("");
   const [soundName, setSoundName] = useState("");
@@ -238,7 +241,7 @@ function SongStudioView({ song, mixUrl, stemJob, stemsReady, soundEffectsReady, 
       const importedTracks = await Promise.all((song.studio_imports ?? []).map(async (item, index) => ({
         id: `import-${item.file}`, name: item.name || `Imported track ${index + 1}`, file: item.file,
         url: await audioUrl(`/api/library/${encodeURIComponent(folder)}/studio/tracks/${encodeURIComponent(item.file)}`),
-        color: ["#ffd166", "#ef6fff", "#4de3b1", "#ff8f70"][index % 4], imported: true, duration: item.duration,
+        color: ["#ffd166", "#ef6fff", "#4de3b1", "#ff8f70"][index % 4], imported: true, combined: Boolean(item.combined_sources?.length), duration: item.duration,
       })));
       const originalUrl = song.original_audio_url ? await audioUrl(song.original_audio_url) : mixUrl;
       if (!cancelled) setTracks([{ id: "mix", name: "Original mix", file: "song.wav", url: originalUrl, color: COLORS.mix, reference: true }, ...stemTracks, ...importedTracks]);
@@ -396,6 +399,12 @@ function SongStudioView({ song, mixUrl, stemJob, stemsReady, soundEffectsReady, 
       const element = audioRefs.current[track.id]; if (!element || audioGraphs.current[track.id]) return;
       try {
         const source = context.createMediaElementSource(element);
+        // Speaker upmix duplicates mono into both channels before the discrete
+        // splitter; stereo sources retain their original left/right channels.
+        const stereoInput = context.createGain();
+        stereoInput.channelCount = 2;
+        stereoInput.channelCountMode = "explicit";
+        stereoInput.channelInterpretation = "speakers";
         const splitter = context.createChannelSplitter(2);
         const gainL = context.createGain(); const gainR = context.createGain(); const crossL = context.createGain(); const crossR = context.createGain(); crossL.gain.value = 0; crossR.gain.value = 0;
         const merger = context.createChannelMerger(2);
@@ -413,7 +422,7 @@ function SongStudioView({ song, mixUrl, stemJob, stemsReady, soundEffectsReady, 
         const reverb = context.createConvolver(); const seconds = 1.5; const impulse = context.createBuffer(2, Math.round(context.sampleRate * seconds), context.sampleRate);
         for (let channel = 0; channel < impulse.numberOfChannels; channel += 1) { const values = impulse.getChannelData(channel); for (let index = 0; index < values.length; index += 1) values[index] = (Math.random() * 2 - 1) * Math.pow(1 - index / values.length, 2.7); }
         reverb.buffer = impulse; const reverbWet = context.createGain(); reverbWet.gain.value = 0;
-        source.connect(splitter); splitter.connect(gainL, 0); splitter.connect(gainR, 1); splitter.connect(crossL, 0); splitter.connect(crossR, 1);
+        source.connect(stereoInput).connect(splitter); splitter.connect(gainL, 0); splitter.connect(gainR, 1); splitter.connect(crossL, 0); splitter.connect(crossR, 1);
         gainL.connect(merger, 0, 0); gainR.connect(merger, 0, 1); crossL.connect(merger, 0, 1); crossR.connect(merger, 0, 0);
         merger.connect(highPass).connect(lowPass).connect(low).connect(mid).connect(high).connect(saturator).connect(compressor).connect(output).connect(context.destination);
         output.connect(echoDelay).connect(echoWet).connect(context.destination); echoDelay.connect(echoFeedback).connect(echoDelay);
@@ -757,6 +766,30 @@ function SongStudioView({ song, mixUrl, stemJob, stemsReady, soundEffectsReady, 
     } catch (error: any) { setMessage(error?.message ?? String(error)); } finally { setSaving(false); }
   };
   const stateList = () => tracks.map((track) => settings[track.id]).filter(Boolean);
+  const applyCombined = async (result: StudioCombineResult) => {
+    const removed = new Set(result.removed);
+    const added: Track[] = await Promise.all(result.imports.map(async (item) => ({ id: `import-${item.file}`, name: item.name, file: item.file, url: await audioUrl(`/api/library/${encodeURIComponent(folder)}/studio/tracks/${encodeURIComponent(item.file)}`), color: "#ffd166", imported: true, combined: Boolean(item.combined_sources?.length), duration: item.duration })));
+    const remaining = tracks.filter((track) => !removed.has(track.file));
+    tracks.filter((track) => removed.has(track.file)).forEach((track) => { audioRefs.current[track.id]?.pause(); delete audioRefs.current[track.id]; });
+    const next: Record<string, StudioTrackState> = {};
+    [...remaining, ...added].forEach((track) => { const state = result.tracks.find((item) => item.name === track.file); if (state) next[track.id] = state; });
+    setSettings(next); setTracks([...remaining, ...added]); setHistory([]); setFuture([]);
+    setSelected(added[0]?.id ?? "mix"); setSelectedClipId(null); setSelectedEffect(null);
+  };
+  const combineSounds = async () => {
+    setPlaying(false); setSaving(true); setMessage("Combining sound tracks...");
+    try {
+      const files = tracks.filter((track) => combineIds.includes(track.id)).map((track) => track.file);
+      await applyCombined(await combineStudioTracks(folder, stateList(), files, combineName));
+      setCombineOpen(false); setMessage("Combined and saved. Use Restore original tracks to undo the combination.");
+    } catch (error: any) { setMessage(error?.message ?? String(error)); } finally { setSaving(false); }
+  };
+  const restoreSounds = async () => {
+    const track = tracks.find((item) => item.id === selected); if (!track?.combined) return;
+    setPlaying(false); setSaving(true);
+    try { await applyCombined(await uncombineStudioTracks(folder, track.file, stateList())); setMessage("Original tracks and their pre-combine edits restored."); }
+    catch (error: any) { setMessage(error?.message ?? String(error)); } finally { setSaving(false); }
+  };
   const save = async () => { setSaving(true); setMessage(""); try { await saveStudioSession(folder, stateList()); setMessage("Session saved with this song."); } catch (error: any) { setMessage(error?.message ?? String(error)); } finally { setSaving(false); } };
   const bounce = async (variant: "custom" | "instrumental" | "acapella") => {
     setSaving(true); setMessage("Building mix…");
@@ -1152,8 +1185,11 @@ function SongStudioView({ song, mixUrl, stemJob, stemsReady, soundEffectsReady, 
             </button>)}
           </div>}
         </section>
+        <button disabled={saving || tracks.filter((track) => track.imported).length < 2} onClick={() => { setCombineIds(activeTrack.imported && !settings[activeTrack.id]?.muted ? [activeTrack.id] : []); setCombineOpen(true); }}>Combine sound tracks...</button>
+        {activeTrack.combined && <button disabled={saving} onClick={() => void restoreSounds()}>Restore original tracks</button>}
         {activeTrack.imported && <button className="remove-studio-track" disabled={saving} onClick={() => void removeImportedTrack()}>Remove imported track</button>}<div className="studio-export"><div className="eyebrow">QUICK EXPORTS</div><button disabled={saving || !hasStems} onClick={() => void bounce("instrumental")}>Instrumental</button><button disabled={saving || !tracks.some((track) => track.id === "vocals")} onClick={() => void bounce("acapella")}>Acapella</button></div>{message && <div className="studio-message">{message}</div>}</aside>
     </div>
+    {combineOpen && <div className="studio-overlay" role="dialog" aria-modal="true" aria-labelledby="combine-title"><section className="studio-source-dialog"><header><h3 id="combine-title">Combine sound tracks</h3><button disabled={saving} onClick={() => setCombineOpen(false)}>Close</button></header><p>Choose two or more sound tracks. Their timing, overlaps, levels, fades and effects become one audio track. Original tracks are kept for restoration.</p><label>Combined track name<input value={combineName} maxLength={80} disabled={saving} onChange={(event) => setCombineName(event.target.value)} /></label><div style={{ maxHeight: "40vh", overflowY: "auto" }}>{tracks.filter((track) => track.imported).map((track) => <label key={track.id} style={{ flexDirection: "row", alignItems: "center" }}><input type="checkbox" style={{ width: "auto" }} disabled={saving || settings[track.id]?.muted} checked={combineIds.includes(track.id)} onChange={(event) => setCombineIds((ids) => event.target.checked ? [...ids, track.id] : ids.filter((id) => id !== track.id))} />{track.name}{settings[track.id]?.muted ? " (unmute first)" : ""}</label>)}</div><p>Restoring originals later discards edits made to the combined lane.</p>{message && <p>{message}</p>}<button className="primary" disabled={saving || combineIds.length < 2} onClick={() => void combineSounds()}>{saving ? "Combining..." : "Combine selected tracks"}</button></section></div>}
     {sourceChooser && <div className="studio-overlay" role="dialog" aria-modal="true" aria-labelledby="track-source-title" onMouseDown={(event) => { if (event.target === event.currentTarget) setSourceChooser(false); }}><section className="studio-source-dialog studio-source-wide"><header><div><div className="eyebrow">NEW STUDIO TRACK</div><h3 id="track-source-title">Where should the sound come from?</h3></div><button aria-label="Close" onClick={() => setSourceChooser(false)}>✕</button></header><div className="studio-source-grid studio-source-grid-3"><button onClick={() => { setSourceChooser(false); window.setTimeout(() => fileInput.current?.click(), 0); }}><span>↑</span><strong>Upload audio</strong><small>Bring in WAV, MP3, FLAC, M4A, AAC or OGG from your computer.</small></button><button disabled={!soundEffectsReady} title={soundEffectsDetail} onClick={() => { setSourceChooser(false); setSoundDialog(true); }}><span>✦</span><strong>Generate a sound</strong><small>{soundEffectsReady ? "Create a local effect with Stable Audio 3 and place it at the playhead." : soundEffectsDetail}</small></button><button disabled={!library.length} onClick={() => setLibraryOpen(true)}><span>◇</span><strong>From your library</strong><small>{library.length ? "Reuse a saved effect. Click one below or drag it onto the timeline." : "Generate sounds on the Effects page first."}</small></button></div>
       {library.length > 0 && <div className="studio-source-library">{library.map((item) => <button key={item.id} type="button" onClick={() => void addLibrarySound(item, position)}><strong>{item.name}</strong><span>{item.duration.toFixed(1)}s</span></button>)}</div>}
     </section></div>}

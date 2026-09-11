@@ -38,7 +38,7 @@ import model_manager
 
 install(LOGS_ROOT)
 log = logging.getLogger("yue2.studio")
-app = FastAPI(title="YuE2 Studio", version="0.4.0")
+app = FastAPI(title="YuE2 Studio", version="0.5.0")
 
 
 @app.middleware("http")
@@ -227,7 +227,7 @@ class AiKeysUpdate(BaseModel):
 
 
 class WritingAssistRequest(BaseModel):
-    action: str = Field(pattern="^(generate|optimize|title|describe|compose)$")
+    action: str = Field(pattern="^(generate|optimize|title|describe|compose|effect)$")
     idea: str = Field(default="", max_length=4000)
     random: bool = False
     title: str = Field(default="", max_length=120)
@@ -235,6 +235,7 @@ class WritingAssistRequest(BaseModel):
     lyrics: str = Field(default="", max_length=24000)
     language: str = Field(default="en", max_length=12)
     instrumental: bool = False
+    effect_engine: str = Field(default="stable", pattern="^(stable|woosh)$")
 
 
 class ChatMessage(BaseModel):
@@ -290,6 +291,11 @@ class SoundEffectRequest(BaseModel):
     negative_prompt: str = Field(default="music, speech, singing, narration, clipping, distortion", max_length=500)
     duration: float = Field(default=5.0, ge=0.5, le=120.0)
     seed: int | None = Field(default=None, ge=0, le=2147483647)
+    steps: int = Field(default=8, ge=1, le=100)
+    sampler: str = Field(default="pingpong", pattern="^(pingpong|euler|rk4|dpmpp|dopri5)$")
+    chunked_decode: bool = True
+    engine: str = Field(default="stable", pattern="^(stable|woosh)$")
+    cfg: float = Field(default=4.5, ge=0.0, le=10.0)
 
 
 class StudioRange(BaseModel):
@@ -338,6 +344,11 @@ class StudioTrackState(BaseModel):
 
 class StudioSessionRequest(BaseModel):
     tracks: list[StudioTrackState] = Field(default_factory=list)
+
+
+class StudioCombineRequest(StudioSessionRequest):
+    files: list[str] = Field(min_length=2, max_length=64)
+    name: str = Field(default="Combined sounds", min_length=1, max_length=80)
 
 
 class StudioBounceRequest(StudioSessionRequest):
@@ -1105,6 +1116,10 @@ def assist_chat(request: ChatAssistRequest):
 @app.post("/api/assist/writing")
 def assist_writing(request: WritingAssistRequest):
     try:
+        if request.action == "effect":
+            if not request.description.strip():
+                raise ValueError("Enter a sound description first.")
+            return ai_assist.enhance_effect(request.description, engine=request.effect_engine)
         if request.action == "compose":
             # One line in, title + structured caption + tagged lyrics out.
             return ai_assist.compose(
@@ -1552,10 +1567,12 @@ async def import_studio_track(folder: str, filename: str, request: Request):
 @app.post("/api/library/{folder}/studio/generate-sfx")
 def generate_studio_sound(folder: str, request: SoundEffectRequest):
     song_dir = resolve_song_folder(folder)
-    current = stable_sfx.status()
+    current = stable_sfx.woosh_status() if request.engine == "woosh" else stable_sfx.status()
     if not current["ready"]:
         raise HTTPException(409, current["detail"])
     params = request.model_dump()
+    if params["engine"] == "woosh":
+        params["duration"] = min(5.0, params["duration"])
     if params["seed"] is None:
         params["seed"] = int.from_bytes(os.urandom(4), "big") & 0x7FFFFFFF
     job = manager.submit("stable_sfx", params, lambda active: stable_sfx.generate(active, song_dir))
@@ -1569,10 +1586,12 @@ def effect_library():
 
 @app.post("/api/effects/generate")
 def generate_effect(request: SoundEffectRequest):
-    current = stable_sfx.status()
+    current = stable_sfx.woosh_status() if request.engine == "woosh" else stable_sfx.status()
     if not current["ready"]:
         raise HTTPException(409, current["detail"])
     params = request.model_dump()
+    if params["engine"] == "woosh":
+        params["duration"] = min(5.0, params["duration"])
     if params["seed"] is None:
         params["seed"] = int.from_bytes(os.urandom(4), "big") & 0x7FFFFFFF
     job = manager.submit("stable_sfx", params, lambda active: stable_sfx.generate(active))
@@ -1640,7 +1659,7 @@ def _studio_clip_chain(index: int, track: StudioTrackState, clips: list[StudioCl
     """Place each clip on the timeline, then mix overlapping pieces from the same source."""
     labels: list[str] = []
     for clip_index, clip in enumerate(clips):
-        parts: list[str] = []
+        parts: list[str] = ["aformat=channel_layouts=stereo"]
         if clip.source_in > 0 or clip.source_out is not None:
             trim = f"atrim=start={clip.source_in:.5f}"
             if clip.source_out is not None:
@@ -1794,15 +1813,7 @@ def _studio_effect_filters(filters: list[str], input_label: str, lane_index: int
     return current
 
 
-@app.post("/api/library/{folder}/studio/bounce")
-def bounce_studio_mix(folder: str, request: StudioBounceRequest):
-    song_dir = resolve_song_folder(folder); manifest, metadata = _studio_manifest(song_dir)
-    ffmpeg = ffmpeg_path()
-    if not ffmpeg: raise HTTPException(409, "FFmpeg is not installed")
-    sources = _studio_sources(song_dir, metadata, request)
-    mix_dir = song_dir / "mixes"; mix_dir.mkdir(parents=True, exist_ok=True)
-    stamp = time.strftime("%Y%m%d-%H%M%S")
-    target = mix_dir / f"{request.variant}_mix_{stamp}.wav"
+def _render_studio_audio(ffmpeg: str, sources: list, request: StudioBounceRequest, target: Path):
     command = [ffmpeg, "-hide_banner", "-loglevel", "error", "-y"]
     for source, _track in sources: command += ["-i", str(source)]
     filters = []
@@ -1820,7 +1831,7 @@ def bounce_studio_mix(folder: str, request: StudioBounceRequest):
             offset = max(0.0, track.offset)
             trim_start = max(0.0, track.trim_start - offset)
             trim_end = max(trim_start, track.trim_end - offset) if track.trim_end is not None else None
-            chain = [f"volume={track.gain:.5f}"]
+            chain = ["aformat=channel_layouts=stereo", f"volume={track.gain:.5f}"]
             if trim_start > 0: chain.append(f"volume=0:enable='lt(t,{trim_start:.5f})'")
             if trim_end is not None: chain.append(f"volume=0:enable='gt(t,{trim_end:.5f})'")
             for cut in track.cuts:
@@ -1851,6 +1862,18 @@ def bounce_studio_mix(folder: str, request: StudioBounceRequest):
     result = subprocess.run(command, capture_output=True, text=True, creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
     if result.returncode != 0 or not target.is_file():
         raise HTTPException(409, result.stderr.strip() or "Could not build the studio mix")
+
+
+@app.post("/api/library/{folder}/studio/bounce")
+def bounce_studio_mix(folder: str, request: StudioBounceRequest):
+    song_dir = resolve_song_folder(folder); manifest, metadata = _studio_manifest(song_dir)
+    ffmpeg = ffmpeg_path()
+    if not ffmpeg: raise HTTPException(409, "FFmpeg is not installed")
+    sources = _studio_sources(song_dir, metadata, request)
+    mix_dir = song_dir / "mixes"; mix_dir.mkdir(parents=True, exist_ok=True)
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    target = mix_dir / f"{request.variant}_mix_{stamp}.wav"
+    _render_studio_audio(ffmpeg, sources, request, target)
     entry = {"file": target.name, "variant": request.variant, "created_at": time.strftime("%Y-%m-%d %H:%M:%S")}
     payload = {
         "download_url": f"/api/library/{song_dir.name}/studio/mixes/{target.name}",
@@ -1870,6 +1893,64 @@ def bounce_studio_mix(folder: str, request: StudioBounceRequest):
     metadata["studio"] = {"tracks": [track.model_dump() for track in request.tracks], "updated_at": entry["created_at"]}
     manifest.write_text(json.dumps(metadata, indent=2, ensure_ascii=False), encoding="utf-8")
     return payload
+
+
+@app.post("/api/library/{folder}/studio/combine")
+def combine_studio_tracks(folder: str, request: StudioCombineRequest):
+    song_dir = resolve_song_folder(folder)
+    manifest, metadata = _studio_manifest(song_dir)
+    chosen = set(request.files)
+    imports = metadata.get("studio_imports") or []
+    originals = [item for item in imports if item["file"] in chosen]
+    states = [track for track in request.tracks if track.name in chosen]
+    if len(chosen) != len(request.files) or len(originals) != len(chosen) or len(states) != len(chosen):
+        raise HTTPException(422, "Choose at least two different imported sound tracks")
+    if any(track.muted for track in states):
+        raise HTTPException(422, "Unmute the selected sound tracks before combining")
+    ffmpeg = ffmpeg_path()
+    if not ffmpeg:
+        raise HTTPException(409, "FFmpeg is not installed")
+    # Solo is a monitoring control: combine every explicitly selected lane.
+    render_states = [track.model_copy(update={"solo": False}) for track in states]
+    bounce = StudioBounceRequest(tracks=render_states)
+    sources = _studio_sources(song_dir, metadata, bounce)
+    if len(sources) != len(chosen):
+        raise HTTPException(409, "A selected sound file is missing")
+    filename = f"combined-{uuid.uuid4().hex}.wav"
+    target = song_dir / "studio" / "tracks" / filename
+    try:
+        _render_studio_audio(ffmpeg, sources, bounce, target)
+        duration = yue2_engine.inspect_wav(target)["duration"]
+    except Exception:
+        target.unlink(missing_ok=True)
+        raise
+    entry = {"file": filename, "name": request.name.strip() or "Combined sounds", "duration": duration,
+             "combined_sources": originals, "combined_states": [track.model_dump() for track in states]}
+    lane = StudioTrackState(name=filename, use_clips=True, clips=[StudioClip(id=uuid.uuid4().hex, source_out=duration)])
+    updated = [track.model_dump() for track in request.tracks if track.name not in chosen] + [lane.model_dump()]
+    metadata["studio_imports"] = [item for item in imports if item["file"] not in chosen] + [entry]
+    metadata["studio"] = {"tracks": updated, "updated_at": time.strftime("%Y-%m-%d %H:%M:%S")}
+    manifest.write_text(json.dumps(metadata, indent=2, ensure_ascii=False), encoding="utf-8")
+    return {"imports": [entry], "tracks": updated, "removed": list(chosen)}
+
+
+@app.post("/api/library/{folder}/studio/uncombine/{filename}")
+def uncombine_studio_tracks(folder: str, filename: str, request: StudioSessionRequest):
+    song_dir = resolve_song_folder(folder)
+    manifest, metadata = _studio_manifest(song_dir)
+    imports = metadata.get("studio_imports") or []
+    entry = next((item for item in imports if item["file"] == filename), None)
+    if not entry or not entry.get("combined_sources"):
+        raise HTTPException(404, "Combined track not found")
+    originals = entry["combined_sources"]
+    for item in originals:
+        if not (song_dir / "studio" / "tracks" / item["file"]).is_file():
+            raise HTTPException(409, "An original sound file is missing")
+    updated = [track.model_dump() for track in request.tracks if track.name != filename] + entry["combined_states"]
+    metadata["studio_imports"] = [item for item in imports if item["file"] != filename] + originals
+    metadata["studio"] = {"tracks": updated, "updated_at": time.strftime("%Y-%m-%d %H:%M:%S")}
+    manifest.write_text(json.dumps(metadata, indent=2, ensure_ascii=False), encoding="utf-8")
+    return {"imports": originals, "tracks": updated, "removed": [filename]}
 
 
 @app.get("/api/library/{folder}/studio/original-mix")

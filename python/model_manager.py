@@ -21,13 +21,14 @@ log = logging.getLogger('yue2.models')
 GIB = 1024 ** 3
 CATALOG = json.loads(Path(__file__).with_name('model_catalog.json').read_text(encoding='utf-8'))
 DEFINITIONS = {
+    'woosh': ('Sound effects — Sony Woosh-Flow', 'Creates short sound effects from simple text prompts on your NVIDIA GPU.', 'Installs Woosh-Flow, its audio decoder and text encoder, tokenizer, and a private Python 3.12 GPU runtime. Generates up to 5 seconds. Weights are for non-commercial use (CC-BY-NC).', True, 'models/sound_effects/woosh', 'woosh', ('torch','torchaudio','transformers','soundfile.py'), 5, 18, 'https://github.com/SonyResearch/Woosh'),
     'yue2': ('YuE2 music generation', 'Creates complete songs from your prompts and lyrics.', 'Installs YuE2-3B, its audio decoder, tokenizer and GPU runtime.', False, '.', 'main', ('yue2','torch','torchaudio'), 5, 25, 'https://huggingface.co/m-a-p/YuE2-3B'),
     'whisper': ('Whisper lyrics and karaoke', 'Matches lyrics to the vocals so words can follow playback.', 'Installs WhisperX, the English alignment model and Whisper large-v3-turbo for transcription fallback. Other alignment languages may download on first use.', True, 'models/lyrics', 'lyrics', ('whisperx','faster_whisper','torch'), 5, 22, 'https://github.com/m-bain/whisperX'),
     'cover_art': ('Cover art — Stable Diffusion 1.5', 'Creates square artwork for your songs on your NVIDIA GPU.', 'Installs Juggernaut Aftermath (an SD 1.5 model), its local configuration and image-generation runtime.', True, 'models/cover_art', 'main', ('diffusers','transformers','accelerate','torch'), 5, 25, 'https://civitai.com/models/46422/juggernaut?modelVersionId=127207'),
     'stems': ('Separate vocals and instruments', 'Splits a song into vocals, drums, bass and other instruments.', 'Installs Demucs and its htdemucs separation model for the Studio.', True, 'models/stems', 'main', ('demucs','torch','torchaudio'), 5, 25, 'https://github.com/facebookresearch/demucs'),
     'sound_effects': ('Sound effects — Stable Audio 3', 'Creates effects such as footsteps, impacts and ambience from text.', 'Installs the sound model, its text encoder and a separate CPU runtime. CPU generation can be slow, but leaves the GPU free.', True, 'models/sound_effects/stable-audio-3-small-sfx', 'sfx', ('stable_audio_3','torch','torchaudio'), 2, 10, 'https://huggingface.co/stabilityai/stable-audio-3-small-sfx'),
 }
-RUNTIME_DIRS = {'main':'python/runtime', 'lyrics':'python/lyrics_runtime', 'sfx':'python/sfx_runtime'}
+RUNTIME_DIRS = {'woosh':'python/woosh_runtime','main':'python/runtime', 'lyrics':'python/lyrics_runtime', 'sfx':'python/sfx_runtime'}
 STATE_FILE = OUTPUTS_ROOT / 'settings' / 'model-installations.json'
 _lock = threading.RLock()
 activity_lock = threading.RLock()
@@ -55,6 +56,8 @@ def runtime_python(key):
 def runtime_ready(key):
     runtime = runtime_python(key)
     packages = runtime.parent.parent / 'Lib/site-packages'
+    if key == 'woosh' and not (ROOT/'python/vendor/Woosh/woosh').is_dir():
+        return False
     return runtime.is_file() and all((packages/name).exists() for name in DEFINITIONS[key][6])
 
 
@@ -110,6 +113,11 @@ def list_models():
             models_ok = all(_has_file(entry) for entry in CATALOG[key])
             runtime_ok = runtime_ready(key)
             remaining = sum(_remaining(entry) for entry in CATALOG[key])
+            if key == 'woosh' and not models_ok:
+                # Archives coexist with extracted weights while installing.
+                import woosh_setup
+                archive_bytes = sum(entry['bytes'] for entry in woosh_setup.manifest()['archives'])
+                remaining += archive_bytes
             installed = models_ok and runtime_ok
             items.append({'id':key, 'name':name, 'description':description, 'does':does,
                 'optional':optional, 'ready':installed, 'model_ready':models_ok, 'runtime_ready':runtime_ok,
@@ -234,11 +242,12 @@ def _stop_process(process):
             process.terminate()
 
 
-def _run(key, command, phase):
+def _run(key, command, phase, extra_env=None):
     global _process
     _check_cancel()
     _update(key, phase=phase)
     env = os.environ.copy()
+    env.update(extra_env or {})
     scratch = OUTPUTS_ROOT/'downloads/tmp'
     scratch.mkdir(parents=True, exist_ok=True)
     env.update({'TMP':str(scratch), 'TEMP':str(scratch), 'PIP_CACHE_DIR':str(OUTPUTS_ROOT/'downloads/pip-cache'),
@@ -295,12 +304,17 @@ def _install_runtime(key):
 def _install(key, token):
     try:
         entries = CATALOG[key]
-        for index, entry in enumerate(entries):
-            _check_cancel()
-            _download(key, entry, token, index, len(entries))
+        if key == 'woosh':
+            import woosh_setup
+            woosh_setup.install(sys.modules[__name__])
+        else:
+            for index, entry in enumerate(entries):
+                _check_cancel()
+                _download(key, entry, token, index, len(entries))
         token = ''
         _update(key, progress=.75)
-        _install_runtime(key)
+        if key != 'woosh':
+            _install_runtime(key)
         _check_cancel()
         if not runtime_ready(key) or not all(_has_file(entry) for entry in entries):
             raise RuntimeError('Installation finished but required files are still missing. See Logs.')
