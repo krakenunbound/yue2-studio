@@ -323,7 +323,7 @@ function elapsedLabel(job: Job) {
 
 function remainingLabel(job: Job) {
   if (!["queued", "running"].includes(job.status)) return "";
-  if (job.eta_seconds == null) return job.progress >= 0.9 ? "Finishing…" : "Calculating ETA…";
+  if (job.eta_seconds == null) return "";
   const seconds = Math.max(0, Math.round(job.eta_seconds));
   const time = jobClock(seconds);
   return `About ${time} remaining`;
@@ -338,7 +338,7 @@ function trackLength(seconds?: number) {
 
 function timingLabel(job: Job) {
   const remaining = remainingLabel(job);
-  return remaining ? `${elapsedLabel(job)} elapsed · ${remaining}` : "";
+  return remaining ? `${elapsedLabel(job)} elapsed · ${remaining}` : `${elapsedLabel(job)} elapsed`;
 }
 
 function playbackTime(value: number) {
