@@ -51,12 +51,16 @@ npm run build
 npm run tauri build -- --no-bundle
 ```
 
-The project version is 0.5.0.
+The project version is 0.5.1.
 
 ## Licenses and upstream work
 
 YuE2 Studio uses the published YuE2-3B inference package and model. Each model download retains its upstream license and may have additional terms. In particular, Stable Audio 3 requires accepting its Hugging Face access terms before it can be downloaded. See [LICENSE](LICENSE), [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md), and [APP_THIRD_PARTY_NOTICES.md](APP_THIRD_PARTY_NOTICES.md).
 
+
+## New in 0.5.1
+
+- Video Studio visualizers now use derived multi-color palettes, full-spectrum Peak and Disc modes, cinematic atmosphere, richer Orbit depth, and corrected Bars/Skyline rendering.
 
 ## New in 0.5.0
 

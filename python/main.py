@@ -38,7 +38,7 @@ import model_manager
 
 install(LOGS_ROOT)
 log = logging.getLogger("yue2.studio")
-app = FastAPI(title="YuE2 Studio", version="0.5.0")
+app = FastAPI(title="YuE2 Studio", version="0.5.1")
 
 
 @app.middleware("http")
@@ -118,6 +118,8 @@ class TauriWebViewCORSMiddleware(BaseHTTPMiddleware):
         response = await call_next(request)
         response.headers["Access-Control-Allow-Origin"] = origin
         response.headers["Access-Control-Allow-Private-Network"] = "true"
+        if request.url.path.startswith("/video-studio"):
+            response.headers["Cache-Control"] = "no-store"
         return response
 
 
@@ -227,7 +229,7 @@ class AiKeysUpdate(BaseModel):
 
 
 class WritingAssistRequest(BaseModel):
-    action: str = Field(pattern="^(generate|optimize|title|describe|compose|effect)$")
+    action: str = Field(pattern="^(generate|optimize|title|describe|compose|effect|translate)$")
     idea: str = Field(default="", max_length=4000)
     random: bool = False
     title: str = Field(default="", max_length=120)
@@ -263,6 +265,8 @@ class VoiceProfilePayload(BaseModel):
     effects: str = Field(default="", max_length=800)
     audition_notes: str = Field(default="", max_length=800)
     expanded: str = Field(default="", max_length=800)
+    tag: str = Field(default="", max_length=80)
+    avatar: str = Field(default="", max_length=32)
     archived: bool = False
 
 
@@ -492,8 +496,12 @@ def prepare_generation_params(params: dict) -> dict:
     safe_description = str(prepared["description"]).replace("\ufeff", "").strip()
     safe_lyrics = str(prepared["lyrics"]).replace("\ufeff", "").strip()
     if prepared["instrumental"]:
-        prepared["rendered_lyrics"] = "[Instrumental]\n(instrumental)"
-        prepared["generation_description"] = safe_description
+        prepared["rendered_lyrics"] = yue2_engine.INSTRUMENTAL_LYRICS
+        lock = yue2_engine.INSTRUMENTAL_STYLE_LOCK
+        prepared["generation_description"] = (
+            safe_description if safe_description.casefold().startswith(lock)
+            else f"{lock}. {safe_description}".strip()
+        )
         prepared["voice_snapshots"] = []
     else:
         prepared["rendered_lyrics"] = safe_lyrics
@@ -1017,6 +1025,22 @@ def status():
     return {"model": yue2_engine.model_status(), "cover_art": cover_art.status(), "stems": stems_status(), "sound_effects": stable_sfx.status(), "lyrics_sync": lyrics_sync.status(), "exports": {"ready": bool(ffmpeg), "detail": "MP3 and FLAC export ready" if ffmpeg else "Run Setup to install the private FFmpeg exporter"}, "service": inference_status(), "gpu": gpu_status(), "ai": ai_vault.status(), "jobs": [job.snapshot() for job in manager.list()[:30]]}
 
 
+class LyricPreferencesRequest(BaseModel):
+    avoid: str = Field(default="", max_length=12000)
+
+
+@app.get("/api/settings/lyric-preferences")
+def get_lyric_preferences():
+    import lyric_preferences
+    return lyric_preferences.load()
+
+
+@app.put("/api/settings/lyric-preferences")
+def put_lyric_preferences(request: LyricPreferencesRequest):
+    import lyric_preferences
+    return lyric_preferences.save(request.avoid)
+
+
 @app.get("/api/settings/ai-keys")
 def get_ai_keys():
     return ai_vault.public_view()
@@ -1090,6 +1114,51 @@ def compile_voices(request: VoiceCompileRequest):
     )
 
 
+@app.get("/api/voices/{profile_id}/avatar")
+def get_voice_avatar(profile_id: str):
+    path = voice_profiles.avatar_path(profile_id)
+    if not path.is_file():
+        raise HTTPException(404, "No portrait yet")
+    return FileResponse(path, media_type="image/webp")
+
+
+@app.post("/api/voices/{profile_id}/avatar")
+async def upload_voice_avatar(profile_id: str, request: Request):
+    if not voice_profiles.get_profile(profile_id):
+        raise HTTPException(404, "Voice profile not found")
+    body = await request.body()
+    if not body:
+        raise HTTPException(400, "The selected image is empty")
+    if len(body) > 20 * 1024 * 1024:
+        raise HTTPException(413, "Portraits are limited to 20 MB")
+    suffix = Path((request.query_params.get("filename") or "portrait.png")).suffix.lower() or ".png"
+    if suffix not in {".png", ".jpg", ".jpeg", ".webp"}:
+        raise HTTPException(415, "Choose a PNG, JPG, JPEG, or WebP image")
+    temporary = voice_profiles.AVATARS_DIR / f"{profile_id}.upload{suffix}"
+    voice_profiles.AVATARS_DIR.mkdir(parents=True, exist_ok=True)
+    temporary.write_bytes(body)
+    try:
+        profile = voice_profiles.save_avatar_image(profile_id, temporary)
+    except Exception as error:
+        raise HTTPException(409, str(error)) from error
+    finally:
+        temporary.unlink(missing_ok=True)
+    return {"profile": profile, "avatar_url": f"/api/voices/{profile_id}/avatar?v={profile['updated_at']}"}
+
+
+@app.post("/api/voices/{profile_id}/avatar/generate")
+def generate_voice_avatar(profile_id: str, request: CoverArtRequest):
+    if not voice_profiles.get_profile(profile_id):
+        raise HTTPException(404, "Voice profile not found")
+    try:
+        profile = voice_profiles.generate_avatar(profile_id, request.direction)
+    except RuntimeError as error:
+        raise HTTPException(409, str(error)) from error
+    except KeyError:
+        raise HTTPException(404, "Voice profile not found")
+    return {"profile": profile, "avatar_url": f"/api/voices/{profile_id}/avatar?v={profile['updated_at']}"}
+
+
 @app.get("/api/assist/caption-library")
 def assist_caption_library():
     """Is the local caption reference library present, and what does it route to?"""
@@ -1137,6 +1206,7 @@ def assist_writing(request: WritingAssistRequest):
                 lyrics=request.lyrics,
                 idea=request.idea,
                 language=request.language,
+                instrumental=request.instrumental,
             )
         return ai_assist.write(
             request.action,
@@ -1221,6 +1291,11 @@ def get_timed_lyrics(folder: str):
     payload = lyrics_sync.load(song_dir)
     if not payload or not payload.get("lines"):
         raise HTTPException(404, "This song does not have synchronized lyrics yet")
+    try:
+        metadata = json.loads((song_dir / "song.json").read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        metadata = {}
+    lyrics_sync.attach_translations(payload, str(metadata.get("english_translation") or ""))
     return payload
 
 
@@ -1483,19 +1558,27 @@ def extract_stems(job: Job) -> dict:
     command = [str(yue2_engine.WORKER_PYTHON), str(Path(__file__).with_name("demucs_runner.py")), "-n", "htdemucs", "--repo", str(STEMS_ROOT), "-d", "cuda", "--segment", "7", "--overlap", "0.1", "--shifts", "1"]
     if job.params["mode"] == "2": command += ["--two-stems", "vocals"]
     command += ["-o", str(output_root), "--filename", "{stem}.{ext}", str(source)]
-    process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace", creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
+    environment = os.environ.copy()
+    environment.update({"PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1", "PYTHONUNBUFFERED": "1"})
+    process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace", env=environment, creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
     assert process.stdout is not None
     job.phase, job.progress = "Separating stems on GPU", 0.08; job.emit(); started = time.monotonic()
+    tail: list[str] = []
     for raw in process.stdout:
         line = raw.strip()
-        if line: log.info("[stems] %s", line)
+        if line:
+            log.info("[stems] %s", line)
+            tail.append(line)
+            tail = tail[-8:]
         match = re.search(r"STEM_PROGRESS\s+(\d{1,3})", line)
         if match:
             fraction = min(1.0, int(match.group(1)) / 100); job.progress = 0.08 + 0.88 * fraction; job.stage_progress = fraction
             elapsed = max(0.1, time.monotonic() - started); job.eta_seconds = elapsed * (1 - fraction) / fraction if fraction else None; job.emit()
         if job.cancel.is_set(): process.kill(); process.wait(timeout=10); raise RuntimeError("cancelled")
     code = process.wait(); target_dir = output_root / "htdemucs"; files = sorted(target_dir.glob("*.wav"))
-    if code != 0 or not files: raise RuntimeError(f"Stem extraction exited with code {code}")
+    if code != 0 or not files:
+        detail = next((item for item in reversed(tail) if item and "STEM_PROGRESS" not in item), "")
+        raise RuntimeError(detail or f"Stem extraction exited with code {code}")
     manifest_path = song_dir / "song.json"; metadata = json.loads(manifest_path.read_text(encoding="utf-8")); metadata["stems"] = [path.name for path in files]; manifest_path.write_text(json.dumps(metadata, indent=2, ensure_ascii=False), encoding="utf-8")
     return {"folder": song_dir.name, "files": [{"name": path.name, "url": f"/api/library/{song_dir.name}/stems/{path.name}"} for path in files]}
 

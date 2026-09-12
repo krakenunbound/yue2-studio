@@ -5,11 +5,26 @@ import gc
 import json
 import math
 import re
+import sys
 import time
 from dataclasses import dataclass
 from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+
+
+def _configure_stdio() -> None:
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if not callable(reconfigure):
+            continue
+        try:
+            reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
+
+_configure_stdio()
 
 
 LANGUAGES_WITHOUT_SPACES = {"ja", "zh", "ko"}
@@ -63,7 +78,12 @@ class TimedToken:
 
 
 def emit(event: str, **payload: Any) -> None:
-    print(json.dumps({"event": event, **payload}, ensure_ascii=False), flush=True)
+    line = json.dumps({"event": event, **payload}, ensure_ascii=True)
+    try:
+        print(line, flush=True)
+    except UnicodeEncodeError:
+        sys.stdout.buffer.write((line + "\n").encode("utf-8"))
+        sys.stdout.buffer.flush()
 
 
 def write_text(path: Path, content: str) -> None:

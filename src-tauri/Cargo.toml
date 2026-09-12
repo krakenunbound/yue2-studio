@@ -1,6 +1,6 @@
 [package]
 name = "yue2-studio"
-version = "0.5.0"
+version = "0.5.1"
 description = "A native YuE2 production studio"
 authors = ["The Kraken"]
 edition = "2021"

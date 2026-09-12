@@ -5,17 +5,22 @@ import json
 import logging
 import os
 import re
+import subprocess
+import sys
 import threading
 import time
 import uuid
 from copy import deepcopy
+from pathlib import Path
 from typing import Any
 
-from config import OUTPUTS_ROOT
+from config import OUTPUTS_ROOT, ROOT, WORKER_PYTHON
 
 log = logging.getLogger("yue2.voices")
 VOICES_PATH = OUTPUTS_ROOT / "settings" / "voice-profiles.json"
+AVATARS_DIR = OUTPUTS_ROOT / "settings" / "voice-avatars"
 _LOCK = threading.RLock()
+_RENDERER = ROOT / "python" / "cover_art_renderer.py"
 
 ROLES = ("female", "male", "backing", "any")
 TRAIT_KEYS = (
@@ -136,6 +141,280 @@ _DEFAULTS: list[dict[str, Any]] = [
         "built_in": True,
         "archived": False,
     },
+    # Local labels may recall public singers. Traits sent to YuE2 must stay acoustic.
+    {
+        "id": "voice-gold-dust-mezzo",
+        "name": "Stevie Nicks",
+        "role": "female",
+        "register": "husky fluttering rock-mezzo",
+        "timbre": "grainy chest, airy head mix, throaty edges, a shawl of breath around the tone",
+        "delivery": "behind-the-beat folk-rock phrasing, circling the pitch, story-first verses, a wide open chorus",
+        "accent": "California American English",
+        "vibrato": "slow, wide, and slightly uneven",
+        "dynamics": "intimate and smoky, then suddenly stadium-open",
+        "harmony": "one ghostly high double on the refrain only",
+        "effects": "close room, plate tails, no glossy pop stack",
+        "tag": "70s folk-rock · husky",
+        "audition_notes": "Local label only. YuE2 receives the acoustic traits, not the name.",
+        "expanded": "70s rock, folk-rock, husky raspy female vocals, smoky contralto, gravelly chest voice, distinctive warbling vibrato, raw emotional power mixed with vulnerability, dark warm tone, analog warmth",
+        "built_in": True,
+        "archived": False,
+    },
+    {
+        "id": "voice-temple-tenor",
+        "name": "Chris Cornell",
+        "role": "male",
+        "register": "dark high baritone that opens into a ringing tenor",
+        "timbre": "bronze chest, huge head voice, controlled grit, long sustained belts with a human crack at the top",
+        "delivery": "intimate tense verses, then a soaring open-throated chorus; fully sung, not screamed as the default",
+        "accent": "Pacific Northwest American English",
+        "vibrato": "controlled, widening on long belts",
+        "dynamics": "quiet menace into cathedral-scale release",
+        "harmony": "none except a low octave ghost on the last refrain",
+        "effects": "dry band mix, long hall only on the biggest notes",
+        "audition_notes": "Local label only. YuE2 receives the acoustic traits, not the name.",
+        "expanded": "a dark high baritone that opens into a ringing tenor, bronze chest, huge head voice, controlled grit and long human belts rather than constant screaming",
+        "built_in": True,
+        "archived": False,
+    },
+    {
+        "id": "voice-stadium-tenor",
+        "name": "Freddie Mercury",
+        "role": "male",
+        "register": "bright theatrical tenor with a piercing upper register",
+        "timbre": "clear cutting vowels, sudden piano-to-forte leaps, camp-to-operatic color without losing rock bite",
+        "delivery": "dramatic contour, precise consonants, call-to-the-back-row choruses, playful verse asides",
+        "accent": "British theatrical English",
+        "vibrato": "present and proud on sustained high notes",
+        "dynamics": "whisper to arena in one phrase",
+        "harmony": "stacked gang answers on selected hook words only",
+        "effects": "piano-front stadium space, no auto-tune",
+        "audition_notes": "Local label only. YuE2 receives the acoustic traits, not the name.",
+        "expanded": "a bright theatrical tenor with a piercing upper register, precise consonants, sudden dynamic leaps and camp-to-operatic rock phrasing",
+        "built_in": True,
+        "archived": False,
+    },
+    {
+        "id": "voice-soul-chest",
+        "name": "Adele",
+        "role": "female",
+        "register": "smoky British contralto-mezzo",
+        "timbre": "thick chest, broken-heart diction, sudden clean belt, audible catch in the throat",
+        "delivery": "piano-ballad verses spoken-sung, then a huge tuneful chorus with held climactic notes",
+        "accent": "London British English",
+        "vibrato": "late, emotional, not constant",
+        "dynamics": "close confession into a belted refrain",
+        "harmony": "one low double on the last chorus",
+        "effects": "dry piano-room vocal, long hall only at the peak",
+        "audition_notes": "Local label only. YuE2 receives the acoustic traits, not the name.",
+        "expanded": "a smoky British contralto-mezzo with thick chest, broken-heart diction, a sudden clean belt and piano-ballad space",
+        "built_in": True,
+        "archived": False,
+    },
+    {
+        "id": "voice-gospel-peak",
+        "name": "Whitney Houston",
+        "role": "female",
+        "register": "gleaming gospel-pop soprano",
+        "timbre": "bright focused vowels, church-trained breath, effortless high belts, tasteful melisma at cadences",
+        "delivery": "clearly pitched verses, a rising pre-chorus, a soaring memorable refrain with controlled runs",
+        "accent": "American English with gospel inflections",
+        "vibrato": "fast and shining on long notes",
+        "dynamics": "composed verses, then a huge open peak",
+        "harmony": "small gospel answers only on the final hook",
+        "effects": "polished 80s-90s pop space, present centered vocal",
+        "audition_notes": "Local label only. YuE2 receives the acoustic traits, not the name.",
+        "expanded": "a gleaming gospel-pop soprano with church-trained breath, effortless high belts and tasteful melisma only at cadences",
+        "built_in": True,
+        "archived": False,
+    },
+    {
+        "id": "voice-jazz-smoke",
+        "name": "Amy Winehouse",
+        "role": "female",
+        "register": "dry jazz-soul alto",
+        "timbre": "smoky-nasal mix, vintage close-mic grain, small-combo intimacy, never a modern pop stack",
+        "delivery": "behind-the-beat phrasing, pub-soul asides, a tuneful hook with conversational swing",
+        "accent": "North London English",
+        "vibrato": "short and vintage",
+        "dynamics": "intimate and slightly weary, then a proud chorus",
+        "harmony": "none, or one dusty unison",
+        "effects": "dry mono-leaning vocal, tape warmth",
+        "audition_notes": "Local label only. YuE2 receives the acoustic traits, not the name.",
+        "expanded": "a dry jazz-soul alto with smoky-nasal mix, vintage close-mic grain, behind-the-beat phrasing and small-combo intimacy",
+        "built_in": True,
+        "archived": False,
+    },
+    {
+        "id": "voice-whisper-close",
+        "name": "Billie Eilish",
+        "role": "female",
+        "register": "extremely close whisper-mezzo",
+        "timbre": "air-forward, almost spoken, sudden chest punches, dry and intimate",
+        "delivery": "ASMR-quiet verses, compact tuneful hooks, no belting choir",
+        "accent": "contemporary Californian English",
+        "vibrato": "almost none",
+        "dynamics": "whisper to a close chest hit, never arena",
+        "harmony": "ghostly self-unison, very low in the mix",
+        "effects": "dry close mic, sub-bass bed, no glossy stack",
+        "audition_notes": "Local label only. YuE2 receives the acoustic traits, not the name.",
+        "expanded": "an extremely close whisper-mezzo with air-forward tone, sudden chest punches, almost no vibrato and dry intimate presence",
+        "built_in": True,
+        "archived": False,
+    },
+    {
+        "id": "voice-country-bright",
+        "name": "Dolly Parton",
+        "role": "female",
+        "register": "bright country soprano",
+        "timbre": "smiling vowels, Appalachian lilt, light sparkle, story-first clarity",
+        "delivery": "plainspoken verses, a memorable communal refrain, no pop belt",
+        "accent": "East Tennessee American English",
+        "vibrato": "light and cheerful",
+        "dynamics": "porch-warm, then a lifted chorus",
+        "harmony": "high country thirds in the refrain only",
+        "effects": "honest acoustic-country room",
+        "audition_notes": "Local label only. YuE2 receives the acoustic traits, not the name.",
+        "expanded": "a bright country soprano with smiling vowels, Appalachian lilt, story-first phrasing and light country-third harmony on the refrain",
+        "built_in": True,
+        "archived": False,
+    },
+    {
+        "id": "voice-railroad-baritone",
+        "name": "Johnny Cash",
+        "role": "male",
+        "register": "deep dry baritone",
+        "timbre": "almost spoken melody, railroad-straight tone, little sweetness, gravely dignity",
+        "delivery": "story-first, on the beat, boom-chicka gravity, no crooner polish",
+        "accent": "Southern American English",
+        "vibrato": "minimal",
+        "dynamics": "level and stern, a slight lift on the last line",
+        "harmony": "none",
+        "effects": "dry slapback, centered, no choir",
+        "audition_notes": "Local label only. YuE2 receives the acoustic traits, not the name.",
+        "expanded": "a deep dry baritone with almost spoken melody, railroad-straight tone, Southern diction and boom-chicka gravity",
+        "built_in": True,
+        "archived": False,
+    },
+    {
+        "id": "voice-art-baritone",
+        "name": "David Bowie",
+        "role": "male",
+        "register": "chameleon British baritone with sudden falsetto color",
+        "timbre": "theatrical consonants, cool and slightly alien, art-rock intimacy",
+        "delivery": "precise phrasing, characterful verse, a soaring unusual chorus interval",
+        "accent": "British art-rock English",
+        "vibrato": "controlled, sometimes withheld",
+        "dynamics": "detached cool into a sudden open cry",
+        "harmony": "one odd high color, never a pop choir",
+        "effects": "dry-to-spacey, no generic crooner plate",
+        "audition_notes": "Local label only. YuE2 receives the acoustic traits, not the name.",
+        "expanded": "a chameleon British baritone with theatrical consonants, sudden falsetto color, art-rock cool and precise unusual phrasing",
+        "built_in": True,
+        "archived": False,
+    },
+    {
+        "id": "voice-liquid-falsetto",
+        "name": "Prince",
+        "role": "male",
+        "register": "agile high tenor with liquid falsetto",
+        "timbre": "tight, sensual, clipped and rhythmic, Minneapolis funk-pop bite",
+        "delivery": "short rhythmic phrases, sudden falsetto leaps, a memorable hook sung on the groove",
+        "accent": "American English",
+        "vibrato": "quick and stylish when used",
+        "dynamics": "whispered verse, athletic chorus",
+        "harmony": "tight stacked answers on the hook only",
+        "effects": "dry funk vocal, slap delay, no choir",
+        "audition_notes": "Local label only. YuE2 receives the acoustic traits, not the name.",
+        "expanded": "an agile high tenor with liquid falsetto, tight rhythmic phrasing, sensual clipped phrases and funk-pop bite",
+        "built_in": True,
+        "archived": False,
+    },
+    {
+        "id": "voice-gospel-soul",
+        "name": "Aretha Franklin",
+        "role": "female",
+        "register": "gospel-soul mezzo",
+        "timbre": "piano-driven fire, shout-to-silk, human grain, Detroit church authority",
+        "delivery": "improvisatory soul phrasing, conversational verses, a climactic gospel refrain",
+        "accent": "American English with gospel inflections",
+        "vibrato": "rich and late",
+        "dynamics": "talk-sing into a holy shout, then silk",
+        "harmony": "small church answers, never a pop choir stack",
+        "effects": "live-room piano and voice, audible air",
+        "audition_notes": "Local label only. YuE2 receives the acoustic traits, not the name.",
+        "expanded": "a gospel-soul mezzo with piano-driven fire, shout-to-silk dynamics, human grain and improvisatory church-trained phrasing",
+        "built_in": True,
+        "archived": False,
+    },
+    {
+        "id": "voice-light-pop-tenor",
+        "name": "Michael Jackson",
+        "role": "male",
+        "register": "light agile tenor",
+        "timbre": "boyish upper mix, razor rhythm, hiccup ornaments, dry precise consonants",
+        "delivery": "dance-pop phrasing locked to the groove, compact tuneful hooks, no cartoon impersonation",
+        "accent": "American English",
+        "vibrato": "short ornamental hiccups rather than wide opera vibrato",
+        "dynamics": "tight and rhythmic, then a bright chorus",
+        "harmony": "tight unison doubles, no choir",
+        "effects": "dry gated 80s-pop space",
+        "audition_notes": "Local label only. YuE2 receives the acoustic traits, not the name.",
+        "expanded": "a light agile tenor with boyish upper mix, razor rhythm, short hiccup ornaments and dry dance-pop phrasing",
+        "built_in": True,
+        "archived": False,
+    },
+    {
+        "id": "voice-cool-silk",
+        "name": "Sade",
+        "role": "female",
+        "register": "cool silky alto",
+        "timbre": "almost spoken smoothness, late-night sophistication, little grain, international hush",
+        "delivery": "behind-the-beat, unforced, a simple memorable refrain",
+        "accent": "British-international English",
+        "vibrato": "almost none",
+        "dynamics": "level, intimate, never belted",
+        "harmony": "none",
+        "effects": "warm close jazz-soul space",
+        "audition_notes": "Local label only. YuE2 receives the acoustic traits, not the name.",
+        "expanded": "a cool silky alto with almost spoken smoothness, little vibrato, behind-the-beat phrasing and late-night sophistication",
+        "built_in": True,
+        "archived": False,
+    },
+    {
+        "id": "voice-showman-baritone",
+        "name": "Elvis Presley",
+        "role": "male",
+        "register": "warm Southern baritone",
+        "timbre": "croon-to-rockabilly snap, gospel-tinged vowels, intimate then showman",
+        "delivery": "hiccup ornaments, behind-then-on the beat, a tuneful refrain with physical swing",
+        "accent": "Southern American English",
+        "vibrato": "present on held notes",
+        "dynamics": "close croon into a rocking chorus",
+        "harmony": "gospel answers only if the arrangement asks",
+        "effects": "slapback echo, dry band",
+        "audition_notes": "Local label only. YuE2 receives the acoustic traits, not the name.",
+        "expanded": "a warm Southern baritone with croon-to-rockabilly snap, gospel-tinged vowels, hiccup ornaments and slapback intimacy",
+        "built_in": True,
+        "archived": False,
+    },
+    {
+        "id": "voice-athletic-mezzo",
+        "name": "Beyoncé",
+        "role": "female",
+        "register": "agile contemporary R&B mezzo",
+        "timbre": "laser pitch, athletic belts, precise diction, retained human grain under polish",
+        "delivery": "tight rhythmic verses, a soaring hook, stacked self-harmony only on the chorus",
+        "accent": "American English with Southern color",
+        "vibrato": "controlled, used as punctuation",
+        "dynamics": "quiet command into a stadium belt",
+        "harmony": "tight self-stacks on the hook, never an anonymous choir",
+        "effects": "modern vocal-forward pop mix, dry verses, wide chorus",
+        "audition_notes": "Local label only. YuE2 receives the acoustic traits, not the name.",
+        "expanded": "an agile contemporary R&B mezzo with laser pitch, athletic belts, precise diction and tight self-harmony only on the hook",
+        "built_in": True,
+        "archived": False,
+    },
 ]
 
 
@@ -158,6 +437,8 @@ def _blank_profile() -> dict[str, Any]:
         "effects": "",
         "audition_notes": "",
         "expanded": "",
+        "tag": "",
+        "avatar": "",
         "built_in": False,
         "archived": False,
         "created_at": "",
@@ -176,8 +457,12 @@ def _normalize_profile(raw: dict[str, Any] | None, *, built_in: bool = False) ->
         return None
     role = str(profile.get("role") or "any").strip().casefold()
     profile["role"] = role if role in ROLES else "any"
-    for key in (*TRAIT_KEYS, "audition_notes", "expanded"):
+    for key in (*TRAIT_KEYS, "audition_notes", "expanded", "tag"):
         profile[key] = str(profile.get(key) or "").strip()[:800]
+    profile["tag"] = profile["tag"][:80]
+    profile["avatar"] = "custom" if str(profile.get("avatar") or "").strip() == "custom" else ""
+    if not profile["tag"] and profile.get("register"):
+        profile["tag"] = str(profile["register"])[:40]
     profile["built_in"] = bool(built_in or raw.get("built_in"))
     profile["archived"] = bool(raw.get("archived"))
     profile["created_at"] = str(raw.get("created_at") or _now())
@@ -203,6 +488,12 @@ def _merge_defaults(data: dict[str, Any]) -> dict[str, Any]:
             continue
         # Keep user edits; only restore the built-in flag and missing ids.
         existing["built_in"] = True
+        if not str(existing.get("tag") or "").strip():
+            existing["tag"] = seed.get("tag") or existing.get("tag") or ""
+        old_stevie = "a husky fluttering rock-mezzo"
+        if seed["id"] == "voice-gold-dust-mezzo" and old_stevie in str(existing.get("expanded") or ""):
+            existing["expanded"] = seed["expanded"]
+            existing["tag"] = seed.get("tag") or existing.get("tag") or ""
     data["version"] = 1
     data["profiles"] = list(known.values())
     return data
@@ -306,6 +597,66 @@ def import_profiles(raw_items: list[Any]) -> list[dict[str, Any]]:
 
 def export_profiles() -> dict[str, Any]:
     return {"version": 1, "profiles": list_profiles(include_archived=True)}
+
+
+def avatar_path(profile_id: str) -> Path:
+    return AVATARS_DIR / f"{profile_id}.webp"
+
+
+def mark_custom_avatar(profile_id: str) -> dict[str, Any]:
+    profile = get_profile(profile_id)
+    if not profile:
+        raise KeyError(profile_id)
+    profile["avatar"] = "custom"
+    profile["updated_at"] = _now()
+    return upsert(profile, profile_id=profile_id)
+
+
+def save_avatar_image(profile_id: str, source: Path) -> dict[str, Any]:
+    if not get_profile(profile_id):
+        raise KeyError(profile_id)
+    from PIL import Image
+    AVATARS_DIR.mkdir(parents=True, exist_ok=True)
+    image = Image.open(source).convert("RGB")
+    image.resize((512, 512), Image.Resampling.LANCZOS).save(avatar_path(profile_id), "WEBP", quality=86, method=6)
+    return mark_custom_avatar(profile_id)
+
+
+def portrait_prompt(profile: dict[str, Any]) -> str:
+    role = str(profile.get("role") or "any")
+    gender = "woman" if role == "female" else "man" if role == "male" else "person"
+    sound = expand_profile(profile)
+    vibe = str(profile.get("tag") or "").strip()
+    pieces = [
+        f"square cinematic studio headshot of an original fictional {gender} singer",
+        vibe,
+        sound,
+        "album-character portrait, no text, no logo, not a likeness of any real celebrity",
+    ]
+    return ", ".join(piece for piece in pieces if piece)[:420]
+
+
+def generate_avatar(profile_id: str, direction: str = "") -> dict[str, Any]:
+    import cover_art
+    profile = get_profile(profile_id)
+    if not profile:
+        raise KeyError(profile_id)
+    if not cover_art.available():
+        raise RuntimeError("Install Cover art in Models to generate a portrait, or upload an image.")
+    prompt = portrait_prompt(profile)
+    if direction.strip():
+        prompt = f"{prompt}, {direction.strip()}"[:420]
+    AVATARS_DIR.mkdir(parents=True, exist_ok=True)
+    png = AVATARS_DIR / f"{profile_id}.png"
+    command = [str(WORKER_PYTHON), str(_RENDERER), "--prompt", prompt, "--output", str(png)]
+    flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+    completed = subprocess.run(command, capture_output=True, text=True, encoding="utf-8", errors="replace", creationflags=flags, timeout=180)
+    if completed.returncode != 0 or not png.is_file():
+        detail = (completed.stdout or completed.stderr or "Portrait generation failed").strip()
+        raise RuntimeError(detail[-400:])
+    result = save_avatar_image(profile_id, png)
+    png.unlink(missing_ok=True)
+    return result
 
 
 def _strip_private_name(text: str, name: str) -> str:

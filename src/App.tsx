@@ -1,3 +1,4 @@
+import LyricPreferencesEditor from "./LyricPreferencesEditor";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -18,6 +19,16 @@ import synthwaveArt from "./assets/templates/synthwave.webp";
 import cyberpunkArt from "./assets/templates/cyberpunk.webp";
 import drumAndBassArt from "./assets/templates/drum-and-bass.webp";
 import lateNightJazzArt from "./assets/templates/late-night-jazz.webp";
+import darkTechnoArt from "./assets/templates/dark-techno.webp";
+import technoArt from "./assets/templates/techno.webp";
+import edmArt from "./assets/templates/edm.webp";
+import countryArt from "./assets/templates/country.webp";
+import operaArt from "./assets/templates/opera.webp";
+import orchestraArt from "./assets/templates/orchestra.webp";
+import kPopArt from "./assets/templates/k-pop.webp";
+import jPopArt from "./assets/templates/j-pop.webp";
+import cityPopArt from "./assets/templates/city-pop.webp";
+import top40Art from "./assets/templates/top-40.webp";
 import Logs from "./Logs";
 import KeysDrawer from "./KeysDrawer";
 import SongStudio from "./SongStudio";
@@ -29,7 +40,7 @@ import type { VoiceProfile } from "./voiceProfiles";
 import { addSongToPlaylist, assistChat, assistWriting, audioUrl, cancelJob, clearMemory, convertAudio, createPlaylist, createWorkspace, deletePlaylist, deleteSong, deleteWorkspace, downloadUrl, extractStems, generate, getJob, getLibrary, getPlaylists, getStatus, getVoiceProfiles, getWorkspaces, moveSongToWorkspace, openOutputs, openSongFolder, refreshModels, regenerateCover, removeSongFromPlaylist, saveAiKeys, synchronizeLyrics, updateSong, uploadSongCover, videoStudioUrl, type ChatMessage, type Job, type Playlist, type Song, type Status, type TimedLyricLine, type TimedLyrics, type TimedWord, type Workspace } from "./api";
 
 const SAMPLE = SAMPLE_DESCRIPTION;
-const EASY_TEMPLATE_PREVIEW = 4;
+const EASY_TEMPLATE_PREVIEW = 8;
 const EASY_SUGGESTIONS = [
   "Write something relaxed",
   "A song to listen to while studying",
@@ -42,7 +53,39 @@ const LYRIC_LANGUAGES = [
   ["ru", "Russian"], ["ja", "Japanese"], ["ko", "Korean"], ["zh", "Chinese"], ["ar", "Arabic"], ["hi", "Hindi"],
 ] as const;
 
-type StylePreset = { genre: string; tempo: string; mood: string; voice: string; arrangement: string; production: string; delivery?: string; instrumental?: boolean };
+type StylePreset = { genre: string; tempo: string; mood: string; voice: string; arrangement: string; production: string; delivery?: string; instrumental?: boolean; language?: string };
+
+function lyricsLanguageName(code: string) {
+  return LYRIC_LANGUAGES.find(([value]) => value === code)?.[1] ?? code;
+}
+
+function inferLyricsLanguage(text: string): string | null {
+  const hay = text.toLowerCase();
+  const explicit: [string, RegExp][] = [
+    ["ja", /日本語|nihongo|\bjapanese\b/],
+    ["ko", /한국어|\bkorean\b/],
+    ["zh", /中文|普通话|\bmandarin\b|\bcantonese\b|\bchinese\b/],
+    ["pt", /portugu[eê]s|\bportuguese\b/],
+    ["it", /italiano|\bitalian\b/],
+    ["es", /espa[nñ]ol|\bspanish\b/],
+    ["fr", /fran[cç]ais|\bfrench\b/],
+    ["de", /deutsch|\bgerman\b/],
+    ["is", /icelandic|old norse|\bnorse\b/],
+    ["en", /\benglish\b/],
+  ];
+  for (const [code, pattern] of explicit) {
+    if (pattern.test(hay)) return code;
+  }
+  const genre: [string, RegExp][] = [
+    ["ja", /\bj-?pop\b|\bcity[\s-]?pop\b|\bj-?rock\b|\banison\b/],
+    ["ko", /\bk-?pop\b/],
+    ["pt", /\bbrazilian phonk\b|\bbaile funk\b/],
+  ];
+  for (const [code, pattern] of genre) {
+    if (pattern.test(hay)) return code;
+  }
+  return null;
+}
 const TEMPLATE_ART: Record<string, string> = {
   "Cinematic alt rock": cinematicAltRockArt,
   "Dark synth-pop": darkSynthPopArt,
@@ -59,6 +102,16 @@ const TEMPLATE_ART: Record<string, string> = {
   Cyberpunk: cyberpunkArt,
   "Drum and bass": drumAndBassArt,
   "Late-night jazz": lateNightJazzArt,
+  "Dark techno": darkTechnoArt,
+  Techno: technoArt,
+  EDM: edmArt,
+  Country: countryArt,
+  Opera: operaArt,
+  Orchestra: orchestraArt,
+  "K-pop": kPopArt,
+  "J-pop": jPopArt,
+  "City pop": cityPopArt,
+  "Top 40": top40Art,
 };
 const STYLE_PRESETS: Record<string, StylePreset> = {
   "Cinematic alt rock": { genre: "Cinematic alternative rock grounded in a real live band, balancing intimate indie-rock restraint with post-rock scale; emotional rather than trailer-like", tempo: "96 BPM, E minor, steady 4/4 with a grounded half-time bridge and no double-time rush", mood: "A close tense confession, determination gathering through the verses, an earned cathartic refrain, a turbulent bridge, then a reflective human resolution", voice: "Singer A (Female), a clear natural alto with warm chest resonance, conversational diction, controlled breath and a trace of rasp only on emotional sustained notes", delivery: "Fully melodic lead singing with restrained intimate verses and a memorable open-throated chorus. Preserve natural phrasing and audible breath; use one low harmony and occasional octave support only at the largest refrain, never a generic choir", arrangement: "A clean electric-guitar figure and close vocal open alone. Bass and dry live drums enter in the first verse; overdriven rhythm guitars widen only at the refrain. Pull back to toms and a single evolving guitar motif in the bridge, then let the final refrain resolve into the original clean figure", production: "Modern organic band recording: close lead vocal, punchy unquantized drums, solid centered bass and broad guitars with believable amplifier texture. Add depth through room and dynamics, not orchestral strings, trailer impacts, synthetic risers, glossy pop stacks or arena-rock excess" },
@@ -69,13 +122,23 @@ const STYLE_PRESETS: Record<string, StylePreset> = {
   "Synthwave": { genre: "Cinematic retro synthwave rooted in late-night analog electronics, dream-pop intimacy and a real song form rather than an outrun instrumental cliché", tempo: "112 BPM, A minor, steady four-on-the-floor pulse with restrained syncopation and no modern EDM drop", mood: "Night-drive anticipation, romantic momentum, a soaring neon-lit refrain, a solitary instrumental passage, then a wistful dawn outro", voice: "Singer A, an androgynous soft midrange voice with intimate lower-register verses, clean open vowels and a quietly confident upper register", delivery: "Fully melodic singing with a compact verse contour and a broad memorable chorus. Add only subtle unison doubles and one floating high harmony in the final refrain; no spoken narration or exaggerated retro affect", arrangement: "A pulsing analog bass and narrow arpeggio establish motion. Gated snare, warm polysynth chords and restrained electric-guitar accents enter by degrees; a melodic mono-synth solo replaces the voice in the bridge. The outro sheds drums and leaves bass, pad and a final vocal fragment", production: "Wide 1980s-inspired soundstage with modern clarity, saturated drums, controlled bright top end, long plate accents and solid centered bass. Avoid vaporwave detuning, tropical-house percussion, trap hats, huge supersaws, rock-arena drums and overblown nostalgia effects" },
   "Acoustic bluegrass": { genre: "Contemporary Appalachian bluegrass played by a close acoustic ensemble, rooted in porch-session timing and modal mountain-song character rather than country-pop", tempo: "124 BPM, G major with Mixolydian verse inflections, buoyant cut-time feel and natural push-pull around the beat", mood: "Plainspoken warmth, playful forward momentum, a communal lift at the refrain, one nimble instrumental conversation, then a tender porch-light ending", voice: "Singer A (Female), a natural alto with conversational phrasing, clear Appalachian inflection, focused straight tone and no pop belt", delivery: "Lead lines remain plainly melodic and story-first. Introduce a distinct high and low harmony only in the refrain, tightly phrased around the lead; verses stay solo and the final line returns to one unadorned voice", arrangement: "Flatpicked acoustic guitar establishes the pulse, followed by upright bass and mandolin chop. Banjo rolls answer vocal gaps; fiddle uses short fills rather than continuous sawing. After the second refrain, banjo and fiddle trade a concise break before the ensemble drops to guitar and voice for the ending", production: "Honest live-room acoustic recording with detailed string transients, minimal compression and natural player placement. Keep fret noise and ensemble breath; no drum kit, piano, pedal steel, glossy Nashville vocal, stadium clap, orchestral layer or pop-country electric guitar" },
   "Deep house relax": { genre: "Deep melodic house for a small late-night room: warm, patient and hypnotic rather than peak-hour EDM", tempo: "118 BPM, B minor, unhurried four-on-the-floor with a lightly swung offbeat and no tempo illusion", mood: "Quiet late-night focus, subtle attraction, a slow weightless lift, one suspended breath, then an easy release back into the groove", voice: "Singer A (Female), a soft contralto used sparingly, with airy close-mic phrases, low relaxed vowels and a distant answer tucked into the stereo field", delivery: "Sing short tuneful phrases with generous space between them. The hook should feel remembered rather than announced; no belting, rap cadence, diva run, spoken club command or full choir", arrangement: "Rounded sub bass and a warm compact kick establish the foundation. Brushed hats, muted chord stabs and filtered pads appear by degrees; a restrained two-bar melodic hook arrives after the groove is trusted. Filter elements down for the bridge, then restore the original pocket without adding a festival drop", production: "Smooth club-weight low end, soft transients, spacious delays and warm tape-like saturation. Keep the kick and bass centered with subtle peripheral detail; no supersaw, snare build, hard techno percussion, bright piano-house riff, trap hats or aggressive sidechain pumping" },
-  "Brazilian phonk": { genre: "Brazilian phonk driven by baile funk and mandelão percussion, street-level and percussive rather than American drift phonk or trap", tempo: "132 BPM, F minor, hard syncopated tamborzão foundation with clipped stops and no half-time trap drag", mood: "Mischievous swagger, relentless forward motion, a taunting explosive hook, a breathless percussive break, then an abrupt confident finish", voice: "Singer A (Male), a gritty low Portuguese-speaking lead with compressed street-call energy, short rhythmic phrases and unmistakable human bite; a small crowd answers selected hook words", delivery: "Use a pitched chant-rap hybrid locked to the tamborzão pattern, with concise melodic contour in the hook. Keep lines short and percussive; avoid long English rap verses, smooth R&B crooning or anonymous sample-pack chatter", arrangement: "A distorted cowbell motif and syncopated tamborzão rhythm strike immediately. Heavy 808 follows the drum gaps; clipped brass stabs and metallic fills answer the vocal. Remove bass for a brief drum-and-crowd break, then return to the opening motif for one final impact and hard stop", production: "Loud gritty street mix with saturated bass, sharp dry percussion and dramatic width only at impacts. Preserve rhythmic clarity under distortion; no Memphis-horror sample, drifting-car ambience, endless trap rolls, glossy pop chorus, EDM riser or cinematic orchestra" },
+  "Brazilian phonk": { genre: "Brazilian phonk driven by baile funk and mandelão percussion, street-level and percussive rather than American drift phonk or trap", tempo: "132 BPM, F minor, hard syncopated tamborzão foundation with clipped stops and no half-time trap drag", mood: "Mischievous swagger, relentless forward motion, a taunting explosive hook, a breathless percussive break, then an abrupt confident finish", voice: "Singer A (Male), a gritty low Portuguese-speaking lead with compressed street-call energy, short rhythmic phrases and unmistakable human bite; a small crowd answers selected hook words", delivery: "Use a pitched chant-rap hybrid locked to the tamborzão pattern, with concise melodic contour in the hook. Keep lines short and percussive; avoid long English rap verses, smooth R&B crooning or anonymous sample-pack chatter", arrangement: "A distorted cowbell motif and syncopated tamborzão rhythm strike immediately. Heavy 808 follows the drum gaps; clipped brass stabs and metallic fills answer the vocal. Remove bass for a brief drum-and-crowd break, then return to the opening motif for one final impact and hard stop", production: "Loud gritty street mix with saturated bass, sharp dry percussion and dramatic width only at impacts. Preserve rhythmic clarity under distortion; no Memphis-horror sample, drifting-car ambience, endless trap rolls, glossy pop chorus, EDM riser or cinematic orchestra", language: "pt" },
   "Lo-fi study beats": { genre: "Instrumental lo-fi hip-hop study music with a small jazz-room vocabulary and an unobtrusive repeating form", tempo: "76 BPM, C major colored by major-seventh and ninth chords, relaxed swung pocket with no tempo changes", mood: "Settled concentration, gentle rainy-window nostalgia, tiny moments of curiosity, no dramatic peak, then a quiet unfinished-feeling fade", voice: "Instrumental; no vocals, speech, vocal chops or hummed melody", arrangement: "Dusty kick and snare, mellow electric piano and soft upright bass establish a four-bar loop. Muted guitar fragments and one understated vibraphone answer appear occasionally; remove drums for a short middle passage, then return with one altered chord voicing and fewer notes", production: "Warm close mix with softened high end, light tape wow, restrained vinyl texture and subtle room rain. Keep every element behind the listener's focus; no intrusive lead solo, boom-bap aggression, trap hats, dramatic filter sweep, cinematic transition or excessive vinyl crackle", instrumental: true },
-  "Heroic anime opening": { genre: "Heroic modern J-rock opening theme with fast live-band drive, melodic urgency and concise dramatic turns; energetic without becoming symphonic trailer music", tempo: "168 BPM, E minor with a carefully earned G-major refrain, straight driving 4/4 and a brief half-time emotional bridge", mood: "Immediate urgency, a determined climb, a triumphant but vulnerable refrain, a moment of doubt, then an emotionally decisive final hook", voice: "Singer A (Female), a bright powerful mezzo with agile consonants, clean focused high notes, emotional edge and enough chest tone to remain human at full intensity", delivery: "Clearly sung rapid verses with precise pitch, a rising pre-chorus and a soaring memorable refrain built on sustained vowels. Add one lower harmony in the second refrain and a compact final stack only on the last phrase; never turn the lead into shouting", arrangement: "Driving live drums, melodic pick-style bass and distorted guitars begin immediately. Piano doubles the pre-chorus climb; a small string line appears only as a countervoice at the first refrain. Drop to piano, bass and half-time drums for the bridge, then use a short guitar lead to launch the final refrain", production: "High-energy polished rock mix with a tight real rhythm section, brilliant chorus width and a clear centered vocal. Keep cinematic transitions brief; no full orchestra bed, trailer percussion, metal breakdown, synthetic idol-pop sheen, endless key changes or wall-to-wall harmony stacks" },
+  "Heroic anime opening": { genre: "Heroic modern J-rock opening theme with fast live-band drive, melodic urgency and concise dramatic turns; energetic without becoming symphonic trailer music", tempo: "168 BPM, E minor with a carefully earned G-major refrain, straight driving 4/4 and a brief half-time emotional bridge", mood: "Immediate urgency, a determined climb, a triumphant but vulnerable refrain, a moment of doubt, then an emotionally decisive final hook", voice: "Singer A (Female), a bright powerful mezzo with agile consonants, clean focused high notes, emotional edge and enough chest tone to remain human at full intensity", delivery: "Clearly sung rapid verses with precise pitch, a rising pre-chorus and a soaring memorable refrain built on sustained vowels. Add one lower harmony in the second refrain and a compact final stack only on the last phrase; never turn the lead into shouting", arrangement: "Driving live drums, melodic pick-style bass and distorted guitars begin immediately. Piano doubles the pre-chorus climb; a small string line appears only as a countervoice at the first refrain. Drop to piano, bass and half-time drums for the bridge, then use a short guitar lead to launch the final refrain", production: "High-energy polished rock mix with a tight real rhythm section, brilliant chorus width and a clear centered vocal. Keep cinematic transitions brief; no full orchestra bed, trailer percussion, metal breakdown, synthetic idol-pop sheen, endless key changes or wall-to-wall harmony stacks", language: "ja" },
   "Afrobeats sunset": { genre: "Warm contemporary Afrobeats with West African guitar conversation, elastic percussion and an intimate coastal evening character; not amapiano or generic tropical pop", tempo: "104 BPM, A major with pentatonic melodic color, relaxed syncopated pocket and no rushed double-time hats", mood: "Easy confidence, flirtatious warmth, a communal sunlit refrain, a playful call-and-response break, then a glowing unforced sunset outro", voice: "Singer A (Male), a smooth light tenor with relaxed melodic phrasing, conversational ad-libs and rhythmic ease. Two supporting voices provide brief warm responses without becoming a pop choir", delivery: "Keep the lead tuneful and rhythmically behind the beat, moving naturally between concise melody and spoken-sung ad-libs. The refrain should be simple and communal; avoid melismatic R&B runs, aggressive rap, belting or theatrical diction", arrangement: "Interlocking shakers, soft kick and rounded bass establish the pocket. Bright highlife-influenced guitar figures answer the voice; airy synth plucks add space. Use a restrained low drum accent rather than a dominant amapiano log-drum line. Strip to percussion, bass and call-and-response before the final refrain, then fade on guitar conversation", production: "Warm spacious mix with elastic groove, clean hand percussion, intimate lead vocal and sunlit stereo ambience. No EDM build, dancehall dembow takeover, trap hats, giant sub drops, glossy choir, orchestral sweetening or overcompressed club loudness" },
   Cyberpunk: { genre: "Rain-soaked industrial cyberpunk with analog synths, metallic percussion and a nocturnal megacity character; not 1980s outrun synthwave, not festival EDM", tempo: "102 BPM, C-sharp minor, mechanical 4/4 with a tight sixteenth pulse and no double-time trap rush", mood: "Cold surveillance, private defiance gathering, a luminous neon refrain, a brief system-failure collapse, then an unresolved rain-soaked fade", voice: "Singer A (Female), a close dry alto with precise consonants, cool chest tone and only a faint digital edge as texture, never a vocoder lead or robotic narrator", delivery: "Low spoken-sung verses that remain pitched; a concise rising pre-chorus and a memorable open neon chorus. Keep diction intelligible in the rain; no belting, rap verses or choir stack", arrangement: "A pulsing analog bass and narrow metallic ostinato open the world. Gated drums and filtered pads enter in the verse; a second synth lead answers the refrain. Strip to bass, rain texture and dry voice in the bridge, then restore the ostinato once and dissolve into wet-city ambience", production: "Dark wet mix with centered sub bass, crisp metallic transients, long alley reverb and selective stereo neon. No supersaw drop, guitar solo, tropical percussion, orchestral trailer hit, trap hats or glossy pop chorus" },
   "Drum and bass": { genre: "Contemporary liquid-leaning drum and bass with rolling bass, rapid breakbeats and late-night club pressure; not happy hardcore, not house, not trap", tempo: "174 BPM, F minor, relentless 4/4 breakbeat with a half-time bass pull in the breakdown and no four-on-the-floor house groove", mood: "Night-bus tension, gathering velocity, a soaring yet controlled drop, a weightless breakdown, then a final decisive rush", voice: "Singer A (Female), a clear midrange with agile consonants, cool UK-club intimacy and enough air to sit above fast drums without shouting", delivery: "Compact tuneful phrases locked to the breaks. Verses stay rhythmic and close; the drop hook is sung and memorable. No toasting parade, endless MC chatter or operatic belt", arrangement: "A dry snare pattern and rolling sub bass strike immediately. Atmospheric pads and a narrow synth stab sketch the verse; the drop adds a second bass movement and tighter hats. Cut to pads and voice for the breakdown, then return with one extra percussion layer and a hard final bar", production: "Club-ready drum-and-bass mix with huge centered sub, razor snare, wide but controlled stereo and a vocal that stays intelligible at speed. No amen-sample mush, jump-up parody, EDM snare rush, tropical bounce, rock guitar or cinematic orchestra" },
   "Late-night jazz": { genre: "Intimate small-combo late-night jazz with brushed swing, close piano and smoky club warmth; not smooth-jazz radio, not big-band spectacle, not lounge electronica", tempo: "88 BPM, F minor, relaxed swung 4/4 with natural push-pull around the beat and no straight-eight pop groove", mood: "Low-lit after-hours ease, private conversation, a tender unforced refrain, a brief instrumental conversation, then a quiet last-call ending", voice: "Singer A (Female), a warm close alto with conversational diction, controlled vibrato and the feeling of singing to one table rather than a hall", delivery: "Behind-the-beat melodic phrasing, space between lines, a simple memorable refrain. No belting, scat marathon, R&B melisma or theatrical diction", arrangement: "Brushed snare, upright bass and a spare piano figure open the room. A muted trumpet answers selected phrases; the voice carries verses almost unaccompanied. After the second refrain, piano and trumpet trade a concise chorus, then the combo drops to bass and voice for the close", production: "Dry close club recording with audible room, wooden-body bass, soft cymbal air and a present centered vocal. No drum machine, synth pad bed, trap hats, string sweetening, glossy pop compression or stadium reverb" },
+  "Dark techno": { genre: "English, dark techno, industrial warehouse, hypnotic and severe rather than festival EDM or trance", tempo: "138 BPM, A minor, relentless four-on-the-floor with a dry sixteenth-hat grid and no breakbeat", mood: "Night-shift pressure, hypnotic dread, a late mechanical peak, then an unresolved concrete fade", voice: "Instrumental; no vocals, speech, vocal chops or hummed melody", arrangement: "A huge centered kick and acid bass ostinato lock immediately. Metallic percussion and a narrow analog stab enter by degrees; strip to kick and sub for a brief tunnel, then restore one extra industrial layer and hard-stop", production: "Dry warehouse mix, mono kick, corrosive mids, long black-room tails. No supersaw drop, pop vocal, guitar, orchestral hit or tropical bounce", instrumental: true },
+  Techno: { genre: "English, peak-time techno, analog drum-machine body, Berlin-club severity rather than big-room EDM", tempo: "132 BPM, F minor, four-on-the-floor with rolling hats and no half-time trap pull", mood: "Hypnotic forward motion, delayed lift, one functional peak, then a long cool-down", voice: "Instrumental; no vocals, speech, vocal chops or hummed melody", arrangement: "Kick, closed hat and a short analog bass riff establish the floor. Filtered chords and a second percussion layer arrive after the groove is trusted; a brief breakdown removes the kick, then the original riff returns harder", production: "Club-weight low end, crisp dry transients, controlled stereo. No festival snare rush, piano-house riff, pop chorus, rock guitar or cinematic orchestra", instrumental: true },
+  EDM: { genre: "English, festival EDM and progressive electro-pop, euphoric mainstage rather than underground techno", tempo: "128 BPM, C major / A minor lift, four-on-the-floor with a clear build-and-drop form", mood: "Anticipation, a rising pre-drop, an explosive singable hook, a brief breath, then a second bigger drop", voice: "Singer A (Female), a bright pop mezzo with clean diction, stadium vowels and enough chest to stay human at full volume", delivery: "Short tuneful phrases in the build, a huge memorable drop hook, one high harmony on the last chorus. No rap verses, opera belt or choir wall", arrangement: "Sidechained supersaw chords, punchy kick and a rising snare build. The drop adds a lead synth hook doubling the vocal; break to pads and voice, then the final drop with one extra percussion layer", production: "Loud polished festival mix, wide stereo, huge centered sub, bright but not harsh top. No dark industrial techno, acoustic band, trap hats or orchestral trailer percussion" },
+  Country: { genre: "English, contemporary country with twangy electric guitar, open-road story-song character rather than bro-country parody or pop-country gloss", tempo: "112 BPM, G major, mid-tempo 4/4 with a two-step lift in the chorus", mood: "Dusty daylight, plainspoken longing, a communal singalong refrain, a short guitar conversation, then a highway-sunset ending", voice: "Singer A (Female), a bright country soprano with smiling vowels, Appalachian lilt, story-first phrasing and light country-third harmony on the refrain", delivery: "Conversational verses, a memorable communal chorus, no pop belt or R&B melisma", arrangement: "Acoustic guitar and pedal steel open. Electric twang, upright-leaning bass and a dry kit enter in the verse; fiddle answers the refrain. Drop to guitar and voice for the bridge, then the full band for one last chorus", production: "Warm analog-country mix, present vocal, honest guitar amps, roomy drums. No trap 808, EDM drop, orchestral swell or glossy choir" },
+  Opera: { genre: "Italian-leaning grand opera and orchestral bel canto, theatrical and acoustic rather than pop-opera crossover or musical theatre", tempo: "72 BPM, D minor opening into a brighter relative-major aria, free recitative verses and a measured 3/4 aria", mood: "Private recitative, gathering passion, a soaring aria, a brief ensemble storm, then a tragic unresolved cadence", voice: "Singer A (Female), a trained lyric soprano with focused vibrato, clear Italianate vowels, supported breath and hall-filling high notes", delivery: "Recitative-like verses, then a fully sung aria with long sustained vowels. A distant chorus only at the climax, never a pop stack", arrangement: "Sparse continuo and low strings for recitative. Full string section, woodwinds and horns enter for the aria; brass and choir for the storm; thin strings for the close", production: "Natural opera-house acoustic, distant hall bloom, no drum kit, electric guitar, synth, auto-tune or contemporary pop compression", language: "it" },
+  Orchestra: { genre: "English, romantic-cinematic orchestra, concert-hall strings and winds, a complete instrumental narrative rather than a trailer stinger", tempo: "84 BPM, E minor, patient 4/4 with a 3/4 waltz episode and no pop backbeat", mood: "Quiet dawn, gathering hope, a noble theme, a turbulent middle, then a luminous resolution", voice: "Instrumental; no vocals, speech, choir-as-pop or hummed melody. A small wordless choir may color one climax as orchestral texture only", arrangement: "Solo woodwind over divided strings opens. Full strings state the theme; brass answers; a waltz episode features harp and clarinet. Storm percussion and low brass, then a final tutti and a single-instrument coda", production: "Concert-hall recording, wide but natural stereo, realistic instrument placement. No drum machine, electric bass, EDM sidechain, guitar amp or pop vocal", instrumental: true },
+  "K-pop": { genre: "Korean, contemporary K-pop with glossy verse-pre-chorus-drop form, tight dance production and a hook-first chorus rather than indie rock or underground hip-hop", tempo: "122 BPM, E-flat major, bright 4/4 with a half-time rap-bridge and a double-chorus finish", mood: "Confident sparkle, a teasing pre-chorus, an addictive hook, a cooler rap-sung bridge, then a maximal final chorus", voice: "Singer A (Female), a bright agile pop mezzo with precise Korean diction, clean high notes and tight rhythmic phrasing", delivery: "Sung verses, a rising pre-chorus, a chantable chorus. Optional short rap-sung lines in the bridge only. Tight stacked harmonies on the hook, never a gospel choir", arrangement: "Punchy drums, bright synth bass and plucked hooks from bar one. Pre-chorus adds risers and claps; the drop chorus doubles the vocal with a synth lead. Strip for the rap-bridge, then the biggest chorus with extra percussion", production: "Ultra-polished K-pop mix, vocal-forward, crisp transients, wide chorus. No live grunge band, dark techno, country twang or orchestral opera", language: "ko" },
+  "J-pop": { genre: "Japanese, contemporary J-pop with candy-bright chords, city-night energy and a concise verse-chorus form rather than anime-rock or city pop nostalgia", tempo: "136 BPM, A major, bouncy 4/4 with a key-lift last chorus", mood: "Youthful rush, a sparkling pre-chorus, a singalong hook, a brief quiet confession, then a brighter final chorus", voice: "Singer A (Female), a bright light soprano-mezzo with agile Japanese diction, smiling vowels and a youthful upper mix", delivery: "Rapid precise verses, a soaring memorable chorus, one high harmony in the last refrain. No rap, metal shout or operatic belt", arrangement: "Bright piano, tight drums and a bouncing bass open. Synths and handclaps widen the pre-chorus; electric guitar doubles the hook. Drop to piano and voice for the bridge, then a key-lift final chorus", production: "Glossy J-pop mix, present vocal, sparkling highs, punchy drums. No lo-fi tape, dark industrial, country steel or festival EDM drop", language: "ja" },
+  "City pop": { genre: "Japanese, 1980s city pop, upbeat and danceable, groovy bass, electric guitar, bright synths, joyful neon-city night rather than modern J-pop or disco parody", tempo: "118 BPM, F major, relaxed four-on-the-floor with a slinky bass syncopation", mood: "Neon dusk, carefree motion, a luminous singalong refrain, a short guitar-and-synth break, then a glowing boulevard fade", voice: "Singer A (Female), a warm clear mezzo with joyful Japanese phrasing, easy upper register and unhurried city-night cool", delivery: "Fully melodic, danceable verses, a memorable chorus. Light unison doubles, no choir", arrangement: "Groovy electric bass and clean guitar establish the night. Bright analog synths, tight drums and muted brass stabs enter by the first chorus. A short guitar-and-synth break, then the chorus returns and fades on bass and pads", production: "Warm analog 80s mix, rounded bass, glossy but not harsh top, vinyl-era stereo. No trap hats, EDM snare rush, metal guitars or orchestral trailer hits", language: "ja" },
+  "Top 40": { genre: "English, contemporary Top 40 pop, radio-ready verse-pre-chorus-chorus, hook-first rather than indie, EDM festival, or singer-songwriter folk", tempo: "102 BPM, C major, mid-tempo 4/4 with a post-chorus chant", mood: "Immediate catchiness, a rising pre-chorus, an addictive hook, a cooler bridge, then a double chorus built for radio", voice: "Singer A (Female), a clear contemporary pop mezzo with radio diction, controlled belt and a memorable hook voice", delivery: "Compact tuneful verses, a lift into the pre-chorus, a chantable chorus. One tight harmony stack on the last chorus only", arrangement: "Punchy drums, rounded bass and a simple guitar or piano figure from the start. Pre-chorus adds claps and a rising synth; chorus opens wide. Bridge strips to voice and a pulse, then the final double chorus", production: "Loud clean radio mix, vocal-forward, tight low end, polished stereo. No underground techno, opera hall, country steel, metal distortion or lo-fi vinyl" },
 };
 
 const VOCAL_PROFILES: Record<string, string> = {
@@ -162,7 +225,7 @@ function isStructuredCaption(value: string) {
 }
 
 const INSTRUMENTAL_VOCAL_DETAILS = "Vocal Gender & Timbre: Instrumental composition; no sung, spoken, chanted, sampled, hummed, or vocal-chop human voice. The principal melodic instrument named in the arrangement occupies the lead role.\nVocal Style: Not applicable; keep the music fully instrumental.\nHarmony/Backing Vocals: None.\nVocal FX: None.";
-const INSTRUMENTAL_BAN = "Fully instrumental. No singing, speech, humming, choir, or vocal chops. Write a complete track with a beginning, development, and ending, about 2 to 4 minutes — not a sting, loop, or short intro.";
+const INSTRUMENTAL_BAN = "Fully instrumental. No singing, speech, humming, vocables, oohs, aahs, choir, rap, or vocal chops. A named instrument carries the lead. Write a complete track with a beginning, development, and ending, about 2 to 4 minutes — not a sting, loop, or short intro.";
 
 function replaceVocalDetails(value: string, body: string) {
   const vocalRe = new RegExp(`(${structuredHeading("Vocal Details")})\\s*[\\s\\S]*?(?=${structuredHeading("Arrangement")}|$)`, "im");
@@ -466,6 +529,7 @@ export default function App() {
   const [lyrics, setLyrics] = useState(DEFAULT_LYRICS);
   const [englishTranslation, setEnglishTranslation] = useState("");
   const [lyricsLanguage, setLyricsLanguage] = useState("en");
+  const [easyTemplate, setEasyTemplate] = useState<string | null>(null);
   const [instrumental, setInstrumental] = useState(false);
   const [cotMode, setCotMode] = useState<"full" | "melody" | "off">("full");
   const [abcScore, setAbcScore] = useState("");
@@ -507,6 +571,8 @@ export default function App() {
   const initialSetupChecked = useRef(false);
   const [systemOpen, setSystemOpen] = useState(false);
   const [keysOpen, setKeysOpen] = useState(false);
+  const [avoidListOpen, setAvoidListOpen] = useState(false);
+  const [lyricAvoidDirty, setLyricAvoidDirty] = useState(false);
   const [lyricAssist, setLyricAssist] = useState<{ source: "create" | "edit"; mode: "generate" | "optimize" } | null>(null);
   const [lyricIdea, setLyricIdea] = useState("");
   const [lyricPreview, setLyricPreview] = useState("");
@@ -514,13 +580,16 @@ export default function App() {
   const [lyricPreviewDescription, setLyricPreviewDescription] = useState("");
   const [lyricBusy, setLyricBusy] = useState(false);
   const [lyricError, setLyricError] = useState("");
+  const [translateBusy, setTranslateBusy] = useState(false);
   const [refreshingModels, setRefreshingModels] = useState(false);
   const [rightDrawer, setRightDrawer] = useState<"job" | "details" | null>(null);
   const [selectedSongId, setSelectedSongId] = useState<string | null>(null);
   const [editorSong, setEditorSong] = useState<Song | null>(null);
   const [editorSource, setEditorSource] = useState("");
   const [videoTool, setVideoTool] = useState<{ song: Song; url: string } | null>(null);
+  const videoStudioFrame = useRef<HTMLIFrameElement>(null);
   const lyricsField = useRef<HTMLTextAreaElement>(null);
+  const createJobEpoch = useRef(0);
   const coverUploadInput = useRef<HTMLInputElement>(null);
   const [leftDrawerWidth, setLeftDrawerWidth] = useState(() => Number(localStorage.getItem("yue2-left-drawer-width")) || 420);
   const [rightDrawerWidth, setRightDrawerWidth] = useState(() => Number(localStorage.getItem("yue2-right-drawer-width")) || 420);
@@ -559,6 +628,10 @@ export default function App() {
   const [chatElapsed, setChatElapsed] = useState(0);
   const chatEnd = useRef<HTMLDivElement | null>(null);
   const chatEpoch = useRef(0);
+  const studioStemKick = useRef("");
+  const composerRef = useRef<HTMLDivElement | null>(null);
+  const chatInputRef = useRef<HTMLTextAreaElement | null>(null);
+  const [sendNudge, setSendNudge] = useState(0);
   const [songIdea, setSongIdea] = useState("");
   const [composeBusy, setComposeBusy] = useState(false);
   const [composeError, setComposeError] = useState("");
@@ -645,6 +718,12 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    if (!videoTool || utilityJob?.kind !== "lyrics_sync") return;
+    const blocker = status?.jobs.find((item) => item.status === "running" && item.id !== utilityJob.id) ?? null;
+    videoStudioFrame.current?.contentWindow?.postMessage({ type: "yue2-video-studio-job", job: utilityJob, blocker }, "*");
+  }, [videoTool, utilityJob, status]);
+
+  useEffect(() => {
     if (!("__TAURI_INTERNALS__" in window)) return;
     const restarted = listen("sidecar-restarted", () => { setError("The local service restarted. Any active generation stopped."); setGenerationJob(null); setUtilityJob(null); void refresh(); });
     const failed = listen<string>("sidecar-error", (event) => setError(`The local YuE2 service could not start: ${event.payload}`));
@@ -653,11 +732,15 @@ export default function App() {
 
   useEffect(() => {
     if (!generationJob || ["succeeded", "failed", "cancelled"].includes(generationJob.status)) return;
+    const epoch = createJobEpoch.current;
     const timer = window.setInterval(async () => {
       try {
-        const result = await getJob(generationJob.id); setGenerationJob(result.job);
+        const result = await getJob(generationJob.id);
+        if (epoch !== createJobEpoch.current) return;
+        setGenerationJob(result.job);
         if (result.job.status === "succeeded") { await refresh(); setStudioView("library"); }
       } catch {
+        if (epoch !== createJobEpoch.current) return;
         void getStatus().then((next) => {
           setStatus(next);
           if (!next.jobs.some((item) => item.id === generationJob.id)) {
@@ -746,6 +829,17 @@ export default function App() {
   const selectedSong = songs.find((song) => song.id === selectedSongId) ?? null;
   const activeEditorSong = editorSong ? (songs.find((song) => song.id === editorSong.id) ?? editorSong) : null;
   const displayJob = utilityJob && ["queued", "running"].includes(utilityJob.status) ? utilityJob : generationJob ?? utilityJob;
+  const studioStemJob = status?.jobs.find((job) => job.kind === "stems" && ["queued", "running"].includes(job.status))
+    ?? (utilityJob?.kind === "stems" ? utilityJob : null);
+  useEffect(() => {
+    if (!activeEditorSong || activeEditorSong.stems?.length || !status?.stems.ready) return;
+    if (studioStemJob && ["queued", "running"].includes(studioStemJob.status)) return;
+    if (studioStemKick.current === activeEditorSong.id) return;
+    studioStemKick.current = activeEditorSong.id;
+    void extractStems(songFolderName(activeEditorSong), "4")
+      .then((result) => setUtilityJob(result.job))
+      .catch((reason: any) => setError(reason?.message ?? String(reason)));
+  }, [activeEditorSong?.id, activeEditorSong?.stems, status?.stems.ready, studioStemJob?.id, studioStemJob?.status]);
   const activePlaylist = playlists.find((item) => item.id === activePlaylistId) ?? null;
   const activeWorkspace = workspaces.find((item) => item.id === activeWorkspaceId) ?? null;
   const librarySongs = librarySection === "projects" ? songs.filter((song) => Boolean(song.studio || song.studio_imports?.length || song.studio_mixes?.length)) : librarySection === "playlists" && activePlaylist ? songs.filter((song) => activePlaylist.song_ids.includes(song.id)) : librarySection === "workspaces" && activeWorkspace ? songs.filter((song) => activeWorkspace.song_ids.includes(song.id)) : songs;
@@ -779,6 +873,7 @@ export default function App() {
 
   async function runLyricAssist(random = false) {
     if (!lyricAssist) return;
+    if (lyricAvoidDirty) { setLyricError("Save your avoid list before writing."); return; }
     setLyricBusy(true); setLyricError("");
     try {
       if (writingConfigured && !writingEnabled) {
@@ -805,6 +900,64 @@ export default function App() {
     } finally { setLyricBusy(false); }
   }
 
+  async function translateLyricsToEnglish(source: "create" | "edit" | "easy") {
+    const sung = source === "edit" ? editLyrics : source === "easy" ? chatLyrics : lyrics;
+    if (!sung.replace(/\[[^\]]+\]/g, "").trim()) {
+      const message = "Write lyrics first, then translate.";
+      if (source === "easy") setChatError(message); else setError(message);
+      return;
+    }
+    if (!writingConfigured) {
+      setKeysOpen(true); setLogsOpen(false); setSystemOpen(false);
+      setError("Save a Writing key in KEYS, then translate to English.");
+      return;
+    }
+    setTranslateBusy(true);
+    setError("");
+    setChatError("");
+    try {
+      if (writingConfigured && !writingEnabled) {
+        await saveAiKeys({ capabilities: { writing: { enabled: true, provider: writing?.provider || "gemini" } } });
+        await refresh();
+      }
+      const result = await assistWriting({
+        action: "translate",
+        lyrics: sung,
+        title: source === "edit" ? editTitle : title,
+        description: source === "edit" ? editDescription : description,
+        language: "en",
+      });
+      const translated = (result.lyrics || "").trim();
+      if (!translated) throw new Error("The writing model returned an empty translation.");
+      if (source === "edit") setEditTranslation(translated);
+      else setEnglishTranslation(translated);
+      const folder = String(generationJob?.result?.folder_name || "");
+      const song = source === "easy"
+        ? (folder ? songs.find((item) => item.folder_name === folder) : songs.find((item) => item.title === title.trim()))
+        : null;
+      if (song) {
+        await updateSong(songFolderName(song), {
+          title: song.title,
+          artist: song.artist || "",
+          album: song.album || "",
+          genre: song.genre || "",
+          year: song.year || "",
+          track_number: song.track_number || "",
+          description: song.description,
+          lyrics: song.lyrics,
+          english_translation: translated,
+          lyrics_language: song.lyrics_language || lyricsLanguage,
+        });
+        await refresh();
+      }
+    } catch (reason: any) {
+      const message = reason?.message ?? String(reason);
+      if (source === "easy") setChatError(message); else setError(message);
+    } finally {
+      setTranslateBusy(false);
+    }
+  }
+
   function applyLyricAssist() {
     if (!lyricAssist || !lyricPreview.trim()) return;
     const cleaned = unwrapWriting(lyricPreview);
@@ -826,12 +979,14 @@ export default function App() {
 
   // Easy mode already holds fresh values that React state has not committed
   // yet, so generation accepts explicit overrides instead of reading state.
-  async function startGeneration(overrides?: { title?: string; description?: string; lyrics?: string }) {
+  async function startGeneration(overrides?: { title?: string; description?: string; lyrics?: string; instrumental?: boolean; lyricsLanguage?: string }) {
     setError("");
     try {
       const seed = lockedSeed.trim() === "" ? null : Number.parseInt(lockedSeed, 10);
+      const instrumentalSong = overrides?.instrumental ?? instrumental;
       const sourceLyrics = overrides?.lyrics ?? lyrics;
-      let productionDescription = applyDescriptionControls((overrides?.description ?? description).trim(), instrumental, vocalGender, excludeStyles);
+      const language = overrides?.lyricsLanguage ?? lyricsLanguage;
+      let productionDescription = applyDescriptionControls((overrides?.description ?? description).trim(), instrumentalSong, vocalGender, excludeStyles);
       const cleanArtist = artist.trim();
       localStorage.setItem("yue2-default-artist", cleanArtist);
       let songTitle = (overrides?.title ?? title).trim();
@@ -848,14 +1003,14 @@ export default function App() {
         const named = await assistWriting({
           action: "title",
           description: productionDescription,
-          lyrics: instrumental ? "" : sourceLyrics,
-          language: lyricsLanguage,
+          lyrics: instrumentalSong ? "" : sourceLyrics,
+          language,
         });
         songTitle = (named.title || "").trim();
         if (needsAutoTitle(songTitle)) throw new Error("Writing did not return a song title. Type one and try again.");
         setTitle(songTitle);
       }
-      const result = await generate({ title: songTitle, artist: cleanArtist, album: album.trim(), genre: genre.trim(), description: productionDescription, lyrics: instrumental ? "" : sourceLyrics, english_translation: instrumental ? "" : englishTranslation, lyrics_language: lyricsLanguage, instrumental, seed: Number.isFinite(seed) ? seed : null, cot_mode: cotMode, abc_score: abcScore.trim() || undefined, cfg, steps, top_k: topK, temperature, exclude_styles: excludeStyles.trim(), vocal_gender: vocalGender, voice_slots: instrumental ? EMPTY_VOICE_SLOTS : voiceSlots });
+      const result = await generate({ title: songTitle, artist: cleanArtist, album: album.trim(), genre: genre.trim(), description: productionDescription, lyrics: instrumentalSong ? "" : sourceLyrics, english_translation: instrumentalSong ? "" : englishTranslation, lyrics_language: language, instrumental: instrumentalSong, seed: Number.isFinite(seed) ? seed : null, cot_mode: cotMode, abc_score: abcScore.trim() || undefined, cfg, steps, top_k: topK, temperature, exclude_styles: excludeStyles.trim(), vocal_gender: vocalGender, voice_slots: instrumentalSong ? EMPTY_VOICE_SLOTS : voiceSlots });
       setGenerationJob(result.job);
     } catch (reason: any) { setError(reason?.message ?? String(reason)); }
   }
@@ -868,6 +1023,7 @@ export default function App() {
     setPromptDeliveryOverride(preset.delivery ?? null);
     setPromptArrangement(preset.arrangement); setPromptProduction(preset.production);
     setInstrumental(presetInstrumental);
+    if (preset.language) setLyricsLanguage(preset.language);
     setDescription(buildStructuredCaption({ genre: preset.genre, tempo: preset.tempo, mood: preset.mood, voice: preset.voice, arrangement: preset.arrangement, production: preset.production, instrumentalSong: presetInstrumental, delivery: preset.delivery ?? VOCAL_DELIVERIES[vocalDelivery] }));
     setTemplatesOpen(false);
   }
@@ -884,10 +1040,26 @@ export default function App() {
     setChatBusy(false);
     setChatElapsed(0);
     setStyleExpanded(false);
+    setEasyTemplate(null);
+    setSendNudge(0);
     setError("");
     applyCreateDefaults();
     if (!generationJob || ["succeeded", "failed", "cancelled"].includes(generationJob.status)) {
       setGenerationJob(null);
+    }
+  }
+
+  async function cancelEasyCreate() {
+    createJobEpoch.current += 1;
+    chatEpoch.current += 1;
+    const jobId = generationJob && ["queued", "running"].includes(generationJob.status) ? generationJob.id : "";
+    setChatBusy(false);
+    setChatPhase("");
+    setChatElapsed(0);
+    setGenerationJob(null);
+    resetEasySession();
+    if (jobId) {
+      try { await cancelJob(jobId); } catch { /* UI already returned to the template page */ }
     }
   }
 
@@ -906,14 +1078,20 @@ export default function App() {
       title: title.trim(),
       description: caption,
       lyrics: instrumental ? "" : (chatLyrics || lyrics),
+      instrumental,
     });
   }
 
   // Easy mode: one conversational turn that also writes and fires the song.
-  async function sendChat(text?: string, opts?: { instrumental?: boolean }) {
+  async function sendChat(text?: string, opts?: { instrumental?: boolean; language?: string }) {
     const content = (text ?? chatInput).trim();
     const wantInstrumental = opts?.instrumental ?? instrumental;
+    const language = opts?.language || inferLyricsLanguage(content) || lyricsLanguage;
+    if (language !== lyricsLanguage) setLyricsLanguage(language);
     if (!content || chatBusy) return;
+    const stamped = language !== "en" && !/sung language:/i.test(content)
+      ? `${content}\n\nSung language: ${lyricsLanguageName(language)}. Write every lyric line in that language and native script. Do not write English lyrics unless asked.`
+      : content;
     if (generationInFlight()) {
       setChatError("Wait for the current song to finish, then send again.");
       return;
@@ -924,6 +1102,7 @@ export default function App() {
       return;
     }
     setChatInput(content);
+    setSendNudge(0);
     const alreadyMade = Boolean(chatStyle) || Boolean(generationJob);
     if (alreadyMade && content === lastEasyPrompt.trim()) {
       rerunEasySong();
@@ -933,8 +1112,8 @@ export default function App() {
     const epoch = chatEpoch.current;
     const stillThisTurn = () => epoch === chatEpoch.current;
     const thread: ChatMessage[] = alreadyMade
-      ? [{ role: "user", content }]
-      : [...chatMessages, { role: "user", content }];
+      ? [{ role: "user", content: stamped }]
+      : [...chatMessages, { role: "user", content: stamped }];
     setChatMessages(thread); setChatError(""); setChatStyle(""); setChatLyrics(""); setStyleExpanded(false);
     setChatBusy(true); setChatPhase("thinking");
     try {
@@ -943,7 +1122,7 @@ export default function App() {
         await refresh();
       }
       if (!stillThisTurn()) return;
-      const turn = await assistChat({ messages: thread, language: lyricsLanguage, instrumental: wantInstrumental });
+      const turn = await assistChat({ messages: thread, language, instrumental: wantInstrumental });
       if (!stillThisTurn()) return;
       setChatMessages([...thread, { role: "assistant", content: turn.reply }]);
       // It decided it needed to ask something first. Let the user answer.
@@ -956,7 +1135,7 @@ export default function App() {
       setChatPhase("writing");
       const styled = await assistWriting({
         action: "describe", idea: turn.brief, title: "",
-        language: lyricsLanguage, instrumental: wantInstrumental,
+        language, instrumental: wantInstrumental,
       });
       if (!stillThisTurn()) return;
       const caption = (styled.description || "").trim();
@@ -971,7 +1150,7 @@ export default function App() {
         setChatPhase("lyrics");
         const song = await assistWriting({
           action: "generate", idea: turn.brief, title: "",
-          description: caption, language: lyricsLanguage,
+          description: caption, language,
         });
         if (!stillThisTurn()) return;
         written = (song.lyrics || "").trim();
@@ -983,7 +1162,7 @@ export default function App() {
       if (!ready || !stillThisTurn()) return;
 
       setChatPhase("starting");
-      await startGeneration({ title: nextTitle, description: caption, lyrics: wantInstrumental ? "" : written });
+      await startGeneration({ title: nextTitle, description: caption, lyrics: wantInstrumental ? "" : written, instrumental: wantInstrumental, lyricsLanguage: language });
     } catch (reason: any) {
       if (stillThisTurn()) setChatError(reason?.message ?? String(reason));
     } finally {
@@ -996,7 +1175,21 @@ export default function App() {
     const presetInstrumental = Boolean(preset.instrumental);
     setInstrumental(presetInstrumental);
     if (presetInstrumental) setVoiceSlots({ ...EMPTY_VOICE_SLOTS });
-    void sendChat(`${name}. ${preset.genre}. ${preset.mood}`, { instrumental: presetInstrumental });
+    setLyricsLanguage(preset.language || "en");
+    setEasyTemplate(name);
+    const languageLine = preset.language && preset.language !== "en"
+      ? ` Sung language: ${lyricsLanguageName(preset.language)}. Write every lyric line in that language and native script, not English.`
+      : "";
+    setChatInput(`${name}. ${preset.genre}. ${preset.mood}.${languageLine}`);
+    setSendNudge((nudge) => nudge + 1);
+    window.setTimeout(() => {
+      composerRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+      const field = chatInputRef.current;
+      if (!field) return;
+      field.focus();
+      const end = field.value.length;
+      field.setSelectionRange(end, end);
+    }, 40);
   }
 
   // The Suno-style front door: one line of intent becomes a title, a full
@@ -1320,6 +1513,7 @@ export default function App() {
     try { localStorage.setItem("yue2-last-studio-song", song.id); } catch { /* ignore quota */ }
     const activeStemJob = status?.jobs.find((job) => job.kind === "stems" && ["queued", "running"].includes(job.status));
     if (!(song.stems?.length) && status?.stems.ready && !activeStemJob) {
+      studioStemKick.current = song.id;
       try { const result = await extractStems(songFolderName(song), "4"); setUtilityJob(result.job); }
       catch (reason: any) { setError(reason?.message ?? String(reason)); }
     }
@@ -1335,6 +1529,7 @@ export default function App() {
   async function startStudioStems() {
     if (!activeEditorSong) return;
     setError("");
+    studioStemKick.current = activeEditorSong.id;
     try { const result = await extractStems(songFolderName(activeEditorSong), "4"); setUtilityJob(result.job); }
     catch (reason: any) { setError(reason?.message ?? String(reason)); }
   }
@@ -1511,7 +1706,7 @@ export default function App() {
               <div className="prompt-actions"><button type="button" className="templates-button" onClick={() => setTemplatesOpen(true)}>▦ Templates</button><button type="button" className="prompt-help-button" onClick={() => { setPromptImport(isStructuredCaption(description) ? "" : description); setPromptHelpOpen(true); }}>✦ Build or rewrite prompt</button><button type="button" className="field-clear-button" disabled={!description.trim()} onClick={() => { setDescription(""); setCaptionRefs(""); }}>Clear description</button></div>
               {captionRefs && <small className="caption-refs">Referenced — {captionRefs}</small>}
             </label>
-            <VoiceProfilesPanel profiles={voiceProfiles} slots={voiceSlots} lyrics={lyrics} description={description} instrumental={instrumental} onSlotsChange={setVoiceSlots} onReload={async () => { const voices = await getVoiceProfiles(true); setVoiceProfiles(voices.items); }} />
+            <VoiceProfilesPanel profiles={voiceProfiles} slots={voiceSlots} lyrics={lyrics} description={description} instrumental={instrumental} coverArtReady={Boolean(status?.cover_art?.ready)} onSlotsChange={setVoiceSlots} onReload={async () => { const voices = await getVoiceProfiles(true); setVoiceProfiles(voices.items); }} />
             <div className="create-options">
               <label className="switch"><input type="checkbox" checked={instrumental} onChange={(event) => {
                 const on = event.target.checked;
@@ -1534,7 +1729,7 @@ export default function App() {
             </section>}
           </div>
           <div className="create-lyrics">
-            {!instrumental ? <><label>Lyrics<div className="lyrics-toolbar"><div className="lyric-direction-pills"><span>Insert:</span>{["Spoken", "Spoken Countdown", "Whispered", "Chanted", "Rapped", "Call and Response"].map((tag) => <button type="button" key={tag} onClick={() => insertLyricDirection(tag)}>{tag}</button>)}</div><div className="lyric-ai-actions"><button type="button" className="lyric-ai-button" title={writingConfigured ? (writingEnabled ? "Rewrite the current lyrics" : "Uses your Writing key (turns Enable on)") : "Save a Writing key in KEYS first"} disabled={!lyrics.replace(/\[[^\]]+\]/g, "").trim()} onClick={() => openLyricAssist("create", "optimize")}>Optimize</button><button type="button" className="lyric-ai-button generate" title={writingConfigured ? "Open lyric idea helper" : "Save a Writing key in KEYS first"} onClick={() => openLyricAssist("create", "generate")}>Generate Lyrics</button><button type="button" className="prepare-lyrics-button" disabled={!lyrics.trim()} onClick={formatCurrentLyrics}>↻ Prepare pasted lyrics</button><button type="button" className="field-clear-button" disabled={!lyrics.trim() && !englishTranslation.trim()} onClick={() => { setLyrics(DEFAULT_LYRICS); setEnglishTranslation(""); }}>Clear lyrics</button></div></div><textarea ref={lyricsField} value={lyrics} onChange={(event) => setLyrics(event.target.value)} rows={18} placeholder="[Verse]\nWords to sing…" /><small>Only official song-section tags remain in the lyric stream. Performance directions move into the Music Description.</small></label><div className="translation-grid"><label>Lyrics language<select value={lyricsLanguage} onChange={(event) => setLyricsLanguage(event.target.value)}>{LYRIC_LANGUAGES.map(([code, name]) => <option value={code} key={code}>{name}</option>)}</select></label><label>English translation (display only)<textarea value={englishTranslation} onChange={(event) => setEnglishTranslation(event.target.value)} rows={7} placeholder="One translated line for each sung lyric line. Section tags are optional." /><small>Saved for karaoke display and review. It is never sent to YuE2 or sung.</small></label></div></> : <div className="instrumental-stage"><span>♫</span><strong>Instrumental song</strong><p>YuE2 will build the arrangement from your description without vocals or written lyrics.</p></div>}
+            {!instrumental ? <><label>Lyrics<div className="lyrics-toolbar"><div className="lyric-direction-pills"><span>Insert:</span>{["Spoken", "Spoken Countdown", "Whispered", "Chanted", "Rapped", "Call and Response"].map((tag) => <button type="button" key={tag} onClick={() => insertLyricDirection(tag)}>{tag}</button>)}</div><div className="lyric-ai-actions"><button type="button" className="lyric-ai-button" onClick={() => setAvoidListOpen(true)}>Avoid in lyrics</button><button type="button" className="lyric-ai-button" title={writingConfigured ? (writingEnabled ? "Rewrite the current lyrics" : "Uses your Writing key (turns Enable on)") : "Save a Writing key in KEYS first"} disabled={!lyrics.replace(/\[[^\]]+\]/g, "").trim()} onClick={() => openLyricAssist("create", "optimize")}>Optimize</button><button type="button" className="lyric-ai-button generate" title={writingConfigured ? "Open lyric idea helper" : "Save a Writing key in KEYS first"} onClick={() => openLyricAssist("create", "generate")}>Generate Lyrics</button><button type="button" className="prepare-lyrics-button" disabled={!lyrics.trim()} onClick={formatCurrentLyrics}>↻ Prepare pasted lyrics</button><button type="button" className="field-clear-button" disabled={!lyrics.trim() && !englishTranslation.trim()} onClick={() => { setLyrics(DEFAULT_LYRICS); setEnglishTranslation(""); }}>Clear lyrics</button></div></div><textarea ref={lyricsField} value={lyrics} onChange={(event) => setLyrics(event.target.value)} rows={18} placeholder="[Verse]\nWords to sing…" /><small>Only official song-section tags remain in the lyric stream. Performance directions move into the Music Description.</small></label><div className="translation-grid"><label>Lyrics language<select value={lyricsLanguage} onChange={(event) => setLyricsLanguage(event.target.value)}>{LYRIC_LANGUAGES.map(([code, name]) => <option value={code} key={code}>{name}</option>)}</select></label><label>English translation (display only)<div className="lyrics-toolbar edit-lyrics-toolbar"><div className="lyric-ai-actions"><button type="button" className="lyric-ai-button" title={writingConfigured ? "Keep the sung lyrics and fill this English display translation" : "Save a Writing key in KEYS first"} disabled={translateBusy || !lyrics.replace(/\[[^\]]+\]/g, "").trim()} onClick={() => void translateLyricsToEnglish("create")}>{translateBusy ? "Translating…" : "Translate to English"}</button></div></div><textarea value={englishTranslation} onChange={(event) => setEnglishTranslation(event.target.value)} rows={7} placeholder="One translated line for each sung lyric line. Section tags are optional." /><small>Sung lyrics stay in the language above. This English copy is for karaoke and review, never sung. Use both: Japanese (or another language) in Lyrics, English here.</small></label></div></> : <div className="instrumental-stage"><span>♫</span><strong>Instrumental song</strong><p>YuE2 will build the arrangement from your description without vocals or written lyrics.</p></div>}
           </div>
         </div>
         <div className="create-footer">
@@ -1548,23 +1743,23 @@ export default function App() {
           <div className="easy-thread">
             {chatMessages.length === 0 && <div className="easy-intro">
               <h2>Create with YuE2</h2>
-              <p>Tell me what you want to hear and I&rsquo;ll write the words, the arrangement, and start the song on your GPU.</p>
+              <p>Pick a template or type an idea, add any last-minute notes, then send. I&rsquo;ll write the words, the arrangement, and start the song on your GPU.</p>
               <div className="easy-suggestions">{EASY_SUGGESTIONS.map((line) => <button type="button" key={line} disabled={chatBusy} onClick={() => void sendChat(line)}>{line}<span>&rarr;</span></button>)}</div>
               <div className="easy-templates-head">
                 <span className="easy-templates-title">Start with a template</span>
-                <button type="button" className="easy-templates-toggle" aria-expanded={templatesExpanded} onClick={() => setTemplatesExpanded((open) => !open)}>
-                  {templatesExpanded ? "Show less" : `View all ${Object.keys(STYLE_PRESETS).length}`}
-                  <i>{templatesExpanded ? "\u2039" : "\u203a"}</i>
-                </button>
               </div>
               <div className="easy-templates">{(templatesExpanded ? Object.keys(STYLE_PRESETS) : Object.keys(STYLE_PRESETS).slice(0, EASY_TEMPLATE_PREVIEW)).map((name) => {
                 const preset = STYLE_PRESETS[name];
-                return <button type="button" key={name} disabled={chatBusy} onClick={() => startFromTemplate(name)}>
+                return <button type="button" key={name} disabled={chatBusy} className={easyTemplate === name ? "selected" : undefined} onClick={() => startFromTemplate(name)}>
                   <img src={TEMPLATE_ART[name]} alt="" />
                   <strong>{name}{preset.instrumental && <em>Instrumental</em>}</strong>
                   <small>{preset.mood}</small>
                 </button>;
-              })}</div>
+              })}
+              <button type="button" className="easy-templates-more" aria-expanded={templatesExpanded} onClick={() => setTemplatesExpanded((open) => !open)}>
+                {templatesExpanded ? "Show less" : "More templates"}
+              </button>
+              </div>
             </div>}
 
             {chatMessages.map((message, index) => <div className={`easy-msg ${message.role}`} key={`${message.role}-${index}`}>{message.content}</div>)}
@@ -1590,9 +1785,14 @@ export default function App() {
               </div>;
             })()}
 
-            {chatLyrics
+            {instrumental
+              ? <div className="easy-lyrics instrumental">
+                  <div className="easy-style-head"><span className="easy-style-label">Lyrics</span></div>
+                  <p>Instrumental &mdash; YuE2 builds the arrangement with no sung vocal.</p>
+                </div>
+              : chatLyrics
               ? <div className="easy-lyrics">
-                  <div className="easy-style-head"><span className="easy-style-label">Lyrics</span><span className="easy-lyrics-count">{chatLyrics.split("\n").filter((line) => line.trim() && !/^\[.+\]$/.test(line.trim())).length} lines</span></div>
+                  <div className="easy-style-head"><span className="easy-style-label">Lyrics</span><span className="easy-lyrics-count">{chatLyrics.split("\n").filter((line) => line.trim() && !/^\[.+\]$/.test(line.trim())).length} lines</span><button type="button" className="lyric-ai-button" disabled={translateBusy || !chatLyrics.replace(/\[[^\]]+\]/g, "").trim()} onClick={() => void translateLyricsToEnglish("easy")}>{translateBusy ? "Translating…" : "Translate to English"}</button></div>
                   <div className="easy-lyrics-body">{chatLyrics.split("\n").map((line, index) => {
                     const text = line.trim();
                     if (!text) return <br key={index} />;
@@ -1600,12 +1800,16 @@ export default function App() {
                       ? <b key={index}>{text}</b>
                       : <span key={index}>{text}</span>;
                   })}</div>
-                  <small className="easy-style-hint">Editable in the Custom tab before you regenerate.</small>
+                  {englishTranslation.trim() ? <div className="easy-translation"><span className="easy-style-label">English</span><div className="easy-lyrics-body">{englishTranslation.split("\n").map((line, index) => {
+                    const text = line.trim();
+                    if (!text) return <br key={index} />;
+                    return /^\[.+\]$/.test(text)
+                      ? <b key={index}>{text}</b>
+                      : <span key={index}>{text}</span>;
+                  })}</div></div> : null}
+                  <small className="easy-style-hint">Sung lyrics stay as written. Translate to English adds a display copy for karaoke — Japanese, English, or both.</small>
                 </div>
-              : <div className="easy-lyrics instrumental">
-                  <div className="easy-style-head"><span className="easy-style-label">Lyrics</span></div>
-                  <p>Instrumental &mdash; YuE2 builds the arrangement with no sung vocal.</p>
-                </div>}
+              : null}
             </div>}
 
             {chatPhase && <div className="easy-status">
@@ -1619,16 +1823,16 @@ export default function App() {
               <div><strong>{title.trim() || "Untitled Song"}</strong><span>{generationJob.error || `${generationJob.phase} · ${timingLabel(generationJob)}`}</span></div>
               <div className="progress"><i style={{ width: `${Math.round(generationJob.progress * 100)}%` }} /></div>
               {["queued", "running"].includes(generationJob.status)
-                ? <button className="danger" onClick={() => void cancelJob(generationJob.id)}>Cancel</button>
+                ? <button className="danger" onClick={() => void cancelEasyCreate()}>Cancel</button>
                 : <button type="button" className="easy-new" onClick={rerunEasySong}>Make another</button>}
             </div>}
 
             <div ref={chatEnd} />
           </div>
 
-          <div className="easy-composer">
-            <textarea rows={2} value={chatInput}
-              placeholder={chatMessages.length ? "Send again for another take, or change the idea…" : "What's the vibe?"}
+          <div className={`easy-composer${sendNudge ? " nudge" : ""}`} ref={composerRef}>
+            <textarea ref={chatInputRef} rows={easyTemplate && !chatMessages.length ? 5 : 2} value={chatInput}
+              placeholder={chatMessages.length ? "Send again for another take, or change the idea…" : easyTemplate ? "Add last-minute notes, then send" : "What's the vibe?"}
               onChange={(event) => setChatInput(event.target.value)}
               onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void sendChat(); } }} />
             <div className="easy-composer-foot">
@@ -1639,10 +1843,11 @@ export default function App() {
                   Start over
                 </button>}
                 {chatMessages.length > 0 && <button type="button" className="easy-new" disabled={!chatStyle || chatBusy || generationInFlight()} onClick={rerunEasySong}>Make another</button>}
-                <button type="button" className="easy-send" disabled={chatBusy || generationInFlight() || !chatInput.trim()} aria-label="Send" onClick={() => void sendChat()}>{chatBusy ? "…" : "\u2191"}</button>
+                <button type="button" key={sendNudge} className={`easy-send${sendNudge ? " nudge" : ""}`} disabled={chatBusy || generationInFlight() || !chatInput.trim()} aria-label="Send" onClick={() => void sendChat()}>{chatBusy ? "…" : "\u2191"}</button>
               </div>
             </div>
           </div>
+          <div className="lyric-avoid-shortcut"><button type="button" className="lyric-ai-button" onClick={() => setAvoidListOpen(true)}>Avoid in lyrics</button></div>
           {chatError && <div className="error">{chatError}</div>}
         </div>}
         {!ready && <div className="truth-note">YuE2 is not ready yet. Check the installed model files and local runtime, then refresh this page.</div>}
@@ -1780,8 +1985,8 @@ export default function App() {
     <KeysDrawer open={keysOpen} onClose={() => setKeysOpen(false)} width={leftDrawerWidth} onResizeStart={(event) => beginDrawerResize("left", event)} />
     {rightDrawer === "job" && <aside className="right-drawer job-drawer" style={{ width: rightDrawerWidth }}><div className="drawer-resizer left" role="separator" aria-label="Resize Job panel" onPointerDown={(event) => beginDrawerResize("right", event)} /><div className="drawer-head"><div><div className="eyebrow">CURRENT JOB</div><h2>{displayJob?.kind === "yue2" ? "Song generation" : displayJob?.kind === "cover_art" ? "Cover art" : displayJob?.kind === "stems" ? "Stem extraction" : displayJob?.kind === "lyrics_sync" ? "Lyric synchronization" : "Generation"}</h2></div><button onClick={() => setRightDrawer(null)}>✕</button></div>{displayJob ? <><div className={`job-banner ${displayJob.status}`}><div><strong>{displayJob.phase}</strong><span>{displayJob.error || timingLabel(displayJob)}</span></div><div className="progress"><i style={{ width: `${Math.round(displayJob.progress * 100)}%` }} /></div>{displayJob.stage_progress != null && displayJob.phase.includes("thumbnail") && <div className="stage-progress"><span>Thumbnail</span><b>{Math.round(displayJob.stage_progress * 100)}%</b><div className="progress"><i style={{ width: `${Math.round(displayJob.stage_progress * 100)}%` }} /></div></div>}</div><section className="card kv"><span>status</span><b>{displayJob.status}</b><span>progress</span><b>{Math.round(displayJob.progress * 100)}%</b><span>elapsed</span><b>{elapsedLabel(displayJob)}</b><span>remaining</span><b>{remainingLabel(displayJob) || "—"}</b><span>active jobs</span><b>{activeJobs}</b></section>{["queued", "running"].includes(displayJob.status) && <button className="danger memory" onClick={() => void cancelJob(displayJob.id)}>Cancel {displayJob.kind === "yue2" ? "generation" : "task"}</button>}</> : <div className="drawer-empty"><span>♫</span><strong>No active generation</strong><p>Your next YuE2 job will appear here with live progress and cancellation.</p></div>}</aside>}
     {rightDrawer === "details" && <aside className="right-drawer details-drawer" style={{ width: rightDrawerWidth }}><div className="drawer-resizer left" role="separator" aria-label="Resize Details panel" onPointerDown={(event) => beginDrawerResize("right", event)} /><div className="drawer-head"><div><div className="eyebrow">SONG DETAILS</div><h2>{selectedSong?.title ?? "No song selected"}</h2></div><button onClick={() => setRightDrawer(null)}>✕</button></div>{selectedSong ? <><p className="details-summary">{selectedSong.description}</p><section className="card kv"><span>artist</span><b>{selectedSong.artist || "Not set"}</b><span>album</span><b>{selectedSong.album || "Not set"}</b><span>genre</span><b>{selectedSong.genre || "Not set"}</b><span>year / track</span><b>{[selectedSong.year, selectedSong.track_number].filter(Boolean).join(" / ") || "Not set"}</b><span>type</span><b>{selectedSong.instrumental ? "Instrumental" : "Vocal"}</b><span>seed</span><b>{selectedSong.seed}</b><span>lyrics</span><b>{selectedSong.timed_lyrics?.lines?.length ? `${selectedSong.timed_lyrics.lines.length} timed lines` : "not synchronized"}</b><span>created</span><b>{selectedSong.created_at}</b></section>{selectedSong.lyrics && <section className="details-lyrics"><div className="eyebrow">LYRICS</div><pre>{selectedSong.lyrics}</pre></section>}{selectedSong.english_translation && <section className="details-lyrics"><div className="eyebrow">ENGLISH TRANSLATION</div><pre>{selectedSong.english_translation}</pre></section>}<div className="detail-actions"><button onClick={() => editSong(selectedSong)}>Edit details</button><button disabled={!status?.lyrics_sync.ready || selectedSong.instrumental} onClick={() => void startLyricsSync(selectedSong)}>{selectedSong.timed_lyrics?.lines?.length ? "Re-sync lyrics" : "Sync lyrics"}</button><button onClick={() => void openAudioEditor(selectedSong)}>Studio</button><button onClick={() => void openVideoStudio(selectedSong)}>Make video</button><button onClick={() => reuseSong(selectedSong)}>Reuse song</button><button onClick={() => downloadSong(selectedSong)}>Download WAV</button><button onClick={() => void openSongFolder(songFolderName(selectedSong))}>Open folder</button></div></> : <div className="drawer-empty"><span>♫</span><strong>Select a song</strong><p>Choose a library song to see its saved prompt, seed, lyrics, and actions.</p></div>}</aside>}
-    {videoTool && <section className="tool-workspace video-tool-workspace" aria-label={`Video Studio for ${videoTool.song.title}`}><header className="tool-head"><div><div className="eyebrow">STUDIO TOOL</div><h2>Video Studio</h2><span>{videoTool.song.title} · local visualizer and MP4 renderer</span></div><button onClick={() => setVideoTool(null)}>Close</button></header><iframe title={`Video Studio — ${videoTool.song.title}`} src={videoTool.url} allow="autoplay" /></section>}
-    {activeEditorSong && <SongStudio key={activeEditorSong.id} song={activeEditorSong} mixUrl={editorSource} stemJob={utilityJob?.kind === "stems" ? utilityJob : null} stemsReady={Boolean(status?.stems.ready)} soundEffectsReady={Boolean(status?.sound_effects.ready)} soundEffectsDetail={status?.sound_effects.detail ?? "Sound-effects setup is not installed."} onStartStems={() => void startStudioStems()} onMixExported={() => { void refresh(); }} onClose={() => { setEditorSong(null); void refresh(); }} />}
+    {videoTool && <section className="tool-workspace video-tool-workspace" aria-label={`Video Studio for ${videoTool.song.title}`}><header className="tool-head"><div><div className="eyebrow">STUDIO TOOL</div><h2>Video Studio</h2><span>{videoTool.song.title} · local visualizer and MP4 renderer</span></div><button onClick={() => setVideoTool(null)}>Close</button></header><iframe ref={videoStudioFrame} title={`Video Studio — ${videoTool.song.title}`} src={videoTool.url} allow="autoplay" /></section>}
+    {activeEditorSong && <SongStudio key={activeEditorSong.id} song={activeEditorSong} mixUrl={editorSource} stemJob={studioStemJob} stemsReady={Boolean(status?.stems.ready)} soundEffectsReady={Boolean(status?.sound_effects.ready)} soundEffectsDetail={status?.sound_effects.detail ?? "Sound-effects setup is not installed."} onStartStems={() => void startStudioStems()} onMixExported={() => { void refresh(); }} onClose={() => { studioStemKick.current = ""; setEditorSong(null); void refresh(); }} />}
     {templatesOpen && <div className="modal-backdrop" role="presentation" onPointerDown={(event) => { if (event.target === event.currentTarget) setTemplatesOpen(false); }}>
       <section className="template-browser" role="dialog" aria-modal="true" aria-labelledby="template-browser-title">
         <div className="modal-head template-head"><div><div className="eyebrow">YUE2 STARTING POINTS</div><h2 id="template-browser-title">Start with a template</h2></div><button aria-label="Close templates" onClick={() => setTemplatesOpen(false)}>✕</button></div>
@@ -1819,6 +2024,7 @@ export default function App() {
         <div className="modal-actions"><button type="button" onClick={() => setConfirmClear(false)}>Keep writing</button><button type="button" className="danger" onClick={applyCreateDefaults}>Clear fields</button></div>
       </section>
     </div>}
+    {avoidListOpen && <div className="modal-backdrop"><section className="modal-card lyric-assist-modal" role="dialog" aria-modal="true" aria-labelledby="avoid-list-title"><div className="modal-head"><h2 id="avoid-list-title">Your lyric avoid list</h2><button type="button" disabled={lyricAvoidDirty} onClick={() => setAvoidListOpen(false)}>Close</button></div><LyricPreferencesEditor expanded onDirtyChange={setLyricAvoidDirty} />{lyricAvoidDirty && <button type="button" onClick={() => { setLyricAvoidDirty(false); setAvoidListOpen(false); }}>Discard unsaved changes</button>}</section></div>}
     {lyricAssist && <div className="modal-backdrop" role="presentation" onPointerDown={(event) => { if (event.target === event.currentTarget && !lyricBusy) setLyricAssist(null); }}>
       <section className="modal-card lyric-assist-modal" role="dialog" aria-modal="true" aria-labelledby="lyric-assist-title">
         <div className="modal-head"><div><div className="eyebrow">WRITING</div><h2 id="lyric-assist-title">{lyricAssist.mode === "optimize" ? "Optimize lyrics" : "Input your idea for lyric generation"}</h2></div><button aria-label="Close" disabled={lyricBusy} onClick={() => setLyricAssist(null)}>✕</button></div>
@@ -1845,7 +2051,7 @@ export default function App() {
         <label>Song title<input autoFocus value={editTitle} maxLength={120} onChange={(event) => setEditTitle(event.target.value)} /></label>
         <div className="metadata-grid"><label>Artist<input value={editArtist} maxLength={160} onChange={(event) => setEditArtist(event.target.value)} placeholder="Artist or band name" /></label><label>Album<input value={editAlbum} maxLength={160} onChange={(event) => setEditAlbum(event.target.value)} placeholder="Album name" /></label><label>Genre<input value={editGenre} maxLength={120} onChange={(event) => setEditGenre(event.target.value)} placeholder="Genre" /></label><label>Year<input value={editYear} inputMode="numeric" maxLength={4} onChange={(event) => setEditYear(event.target.value.replace(/\D/g, "").slice(0, 4))} placeholder="2026" /></label><label>Track number<input value={editTrackNumber} maxLength={7} onChange={(event) => setEditTrackNumber(event.target.value.replace(/[^\d/]/g, ""))} placeholder="1 or 1/12" /></label></div>
         <label>Music description<textarea rows={7} value={editDescription} onChange={(event) => setEditDescription(event.target.value)} /></label>
-        {!editingSong.instrumental && <><label>Lyrics language<select value={editLyricsLanguage} onChange={(event) => setEditLyricsLanguage(event.target.value)}>{LYRIC_LANGUAGES.map(([code, name]) => <option value={code} key={code}>{name}</option>)}</select></label><label>Lyrics<div className="lyrics-toolbar edit-lyrics-toolbar"><div className="lyric-ai-actions"><button type="button" className="lyric-ai-button" disabled={!editLyrics.replace(/\[[^\]]+\]/g, "").trim()} onClick={() => openLyricAssist("edit", "optimize")}>Optimize</button><button type="button" className="lyric-ai-button generate" onClick={() => openLyricAssist("edit", "generate")}>Generate Lyrics</button></div></div><textarea rows={10} value={editLyrics} onChange={(event) => setEditLyrics(event.target.value)} /></label><label>English translation (display only)<textarea rows={8} value={editTranslation} onChange={(event) => setEditTranslation(event.target.value)} placeholder="One translated line for each sung line" /><small>The translation appears beneath synchronized lyrics and is never sung.</small></label></>}
+        {!editingSong.instrumental && <><label>Lyrics language<select value={editLyricsLanguage} onChange={(event) => setEditLyricsLanguage(event.target.value)}>{LYRIC_LANGUAGES.map(([code, name]) => <option value={code} key={code}>{name}</option>)}</select></label><label>Lyrics<div className="lyrics-toolbar edit-lyrics-toolbar"><div className="lyric-ai-actions"><button type="button" className="lyric-ai-button" disabled={!editLyrics.replace(/\[[^\]]+\]/g, "").trim()} onClick={() => openLyricAssist("edit", "optimize")}>Optimize</button><button type="button" className="lyric-ai-button generate" onClick={() => openLyricAssist("edit", "generate")}>Generate Lyrics</button></div></div><textarea rows={10} value={editLyrics} onChange={(event) => setEditLyrics(event.target.value)} /></label><label>English translation (display only)<div className="lyrics-toolbar edit-lyrics-toolbar"><div className="lyric-ai-actions"><button type="button" className="lyric-ai-button" disabled={translateBusy || !editLyrics.replace(/\[[^\]]+\]/g, "").trim()} onClick={() => void translateLyricsToEnglish("edit")}>{translateBusy ? "Translating…" : "Translate to English"}</button></div></div><textarea rows={8} value={editTranslation} onChange={(event) => setEditTranslation(event.target.value)} placeholder="One translated line for each sung line" /><small>The translation appears beneath synchronized lyrics and is never sung. Keep Japanese (or another language) in Lyrics for both.</small></label></>}
         <p className="modal-note">This updates the saved library details. If lyrics changed, run Re-sync lyrics so playback timing matches the new words.</p>
         <div className="modal-actions"><button onClick={() => setEditingSong(null)}>Cancel</button><button className="primary" disabled={libraryBusy || !editTitle.trim()} onClick={() => void saveSongDetails()}>{libraryBusy ? "Saving…" : "Save changes"}</button></div>
       </section>

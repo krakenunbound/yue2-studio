@@ -1,6 +1,6 @@
 # YuE2 Studio user guide
 
-For version 0.5.0. Start with the quick start, then use the section for the task you want to do. The README gallery uses older screenshots; some controls have changed.
+For version 0.5.1. Start with the quick start, then use the section for the task you want to do. The README gallery uses older screenshots; some controls have changed.
 
 ## Contents
 
@@ -59,11 +59,17 @@ This app has been used on an RTX 3090 with 24 GB VRAM. File size is not the same
 
 ### A useful music description
 
-Describe genre, tempo/feel, mood, voice, instruments and how the arrangement changes. Keep them consistent. For example:
+YuE2 wants a compact comma-separated **style** string, not a long caption and not YuE v1 space-separated tags. Preferred order: language, genre, voice, instruments, groove/tempo, optional BPM. For example:
 
-> Intimate late-night jazz, relaxed brushed drums, upright bass and warm piano. A restrained alto vocal, a short instrumental opening, gentle verses and a slightly fuller chorus. Close, natural room sound.
+> English, warm piano pop, expressive female voice, acoustic piano, rounded bass and light drums, lyrical memorable melody, unhurried phrasing, 88 BPM
 
 Start with one coherent style. Change one major instruction at a time when comparing results. Contradictory descriptions, many unrelated styles, or demands for several different arrangements make evaluation harder.
+
+### Your lyric avoid list
+
+Click **Avoid in lyrics** below the Easy-mode idea box or beside the Custom-mode lyric buttons. Both open the same saved list. Enter one word, phrase or writing habit per line, then click **Save avoid list**. Slash-separated alternatives and phrase patterns with blanks can also be described. Clear the field and save to disable the list.
+
+The saved list is included as a mandatory instruction with lyric generation, rewriting and Easy-mode writing, regardless of the selected provider. It is stored locally in `outputs/settings/lyric-preferences.json`. It does not rewrite existing recordings or lyrics automatically, and it is not applied to sound-effect prompts or artwork. Review the generated text: prompt instructions are not a guaranteed word filter.
 
 ### Lyrics and vocal directions
 

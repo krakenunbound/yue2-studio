@@ -55,6 +55,21 @@
                     <button class="preset" data-preset="bars" type="button">Bars</button>
                     <button class="preset" data-preset="pulse" type="button">Pulse</button>
                     <button class="preset" data-preset="wave" type="button">Wave</button>
+                    <button class="preset" data-preset="halo" type="button">Halo</button>
+                    <button class="preset" data-preset="aurora" type="button">Aurora</button>
+                    <button class="preset" data-preset="sunburst" type="button">Sunburst</button>
+                    <button class="preset" data-preset="grid" type="button">Grid</button>
+                    <button class="preset" data-preset="tunnel" type="button">Tunnel</button>
+                    <button class="preset" data-preset="arc" type="button">Arc</button>
+                    <button class="preset" data-preset="split" type="button">Split</button>
+                    <button class="preset" data-preset="skyline" type="button">Skyline</button>
+                    <button class="preset" data-preset="flow" type="button">Flow</button>
+                    <button class="preset" data-preset="scope" type="button">Scope</button>
+                    <button class="preset" data-preset="rings" type="button">Rings</button>
+                    <button class="preset" data-preset="mesh" type="button">Mesh</button>
+                    <button class="preset" data-preset="disc" type="button">Disc</button>
+                    <button class="preset" data-preset="peak" type="button">Peak</button>
+                    <button class="preset" data-preset="spiral" type="button">Spiral</button>
                 </div>
             </section>
 
@@ -105,13 +120,16 @@
                     <button class="preset" data-particle="stars" type="button">Stars</button>
                     <button class="preset" data-particle="embers" type="button">Embers</button>
                     <button class="preset" data-particle="warp" type="button">Warp</button>
-                    <button class="preset" data-particle="sparks" type="button">Sparks</button>
+                    <button class="preset" data-particle="notes" type="button">Notes</button>
+                    <button class="preset" data-particle="bokeh" type="button">Bokeh</button>
+                    <button class="preset" data-particle="snow" type="button">Snow</button>
+                    <button class="preset" data-particle="bubbles" type="button">Bubbles</button>
                 </div>
                 <label class="range-field">
                     <span>Amount</span>
                     <input id="particle-count" type="range" min="0" max="180" value="64">
                 </label>
-                <div class="status" id="particle-status">Floating dust motes. Rain, stars, embers, warp, and sparks come from the Kraken Radio canvas effects.</div>
+                <div class="status" id="particle-status">Floating dust motes. Rain falls in thin vertical streaks. Notes, bokeh, snow, and bubbles are music-video extras.</div>
             </section>
 
             <section class="card">
@@ -119,6 +137,10 @@
                 <div class="toggle-row">
                     <button class="toggle active" id="lyrics-on" type="button">On</button>
                     <button class="toggle" id="lyrics-off" type="button">Off</button>
+                </div>
+                <div class="toggle-row dual-lyrics-row" id="dual-lyrics-row">
+                    <button class="toggle active" id="dual-on" type="button">Both languages</button>
+                    <button class="toggle" id="dual-off" type="button">Sung only</button>
                 </div>
                 <div class="status" id="lyrics-status">No timed lyrics were loaded for this song yet.</div>
                 <div class="field-row">
@@ -133,7 +155,7 @@
                     <button class="toggle active" id="center-image-on" type="button">Cover</button>
                     <button class="toggle" id="center-image-off" type="button">None</button>
                 </div>
-                <div class="status" id="center-image-status">Circular cover sits in the visualizer. None leaves the center open.</div>
+                <div class="status" id="center-image-status">Cover wraps circular presets around the thumbnail. None lets Orbit, Pulse, Halo, Sunburst, Tunnel, and Arc fill the frame.</div>
                 <div class="field-row">
                     <button id="generate-cover" class="primary" type="button">Generate Cover</button>
                     <button id="use-cover-background" class="secondary" type="button">Use As Background</button>
@@ -181,6 +203,6 @@
     </main>
 
     <audio id="source-audio" crossorigin="anonymous" preload="metadata"></audio>
-    <script src="/video-studio-static/video_studio.js?v=20260829-portrait-bars"></script>
+    <script src="/video-studio-static/video_studio.js?v=20260913-bars-skyline-fix"></script>
 </body>
 </html>

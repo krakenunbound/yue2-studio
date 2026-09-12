@@ -9,6 +9,7 @@ import urllib.error
 import urllib.request
 from typing import Any, Literal
 
+import lyric_preferences
 import ai_guides
 import ai_vault
 import caption_library
@@ -70,18 +71,51 @@ def prepare(
         "provider": access["provider"],
         "model": access["model"],
         "key": access["key"],
-        "system": guide["system"],
+        "system": guide["system"] + (lyric_preferences.prompt() if (guide_name or capability) in {"writing", "chat"} else ""),
         "constraints": guide["constraints"],
         "orientation": guide.get("orientation"),
     }
 
 
+LANGUAGE_NAMES = {
+    "en": "English", "ja": "Japanese", "ko": "Korean", "zh": "Chinese",
+    "es": "Spanish", "fr": "French", "de": "German", "it": "Italian",
+    "pt": "Portuguese", "nl": "Dutch", "sv": "Swedish", "no": "Norwegian",
+    "da": "Danish", "fi": "Finnish", "pl": "Polish", "uk": "Ukrainian",
+    "ru": "Russian", "ar": "Arabic", "hi": "Hindi", "is": "Icelandic",
+}
+
+
+def language_label(value: str) -> str:
+    raw = str(value or "en").strip()
+    key = raw.lower()
+    if key in LANGUAGE_NAMES:
+        return LANGUAGE_NAMES[key]
+    for name in LANGUAGE_NAMES.values():
+        if name.lower() == key:
+            return name
+    return raw or "English"
+
+
+def language_instruction(value: str) -> str:
+    label = language_label(value)
+    if label.lower() == "english":
+        return f"Sung language: {label}."
+    return (
+        f"Sung language: {label}. Write every sung line in {label} using native script. "
+        "Do not write English verses, romanization-only lyrics, or an English translation "
+        "in the lyric stream unless the user explicitly asked for English lyrics."
+    )
+
+
 def write(action: str, *, idea: str = "", random: bool = False, title: str = "", description: str = "", lyrics: str = "", language: str = "en") -> dict[str, str]:
-    if action not in {"generate", "optimize", "title"}:
+    if action not in {"generate", "optimize", "title", "translate"}:
         raise ValueError("Unknown writing action")
+    if action == "translate" and not re.sub(r"\[[^\]]*\]", "", str(lyrics or "")).strip():
+        raise ValueError("Write lyrics first, then translate.")
     packed = prepare("writing")
     user = _writing_user(action, idea=idea, random=random, title=title, description=description, lyrics=lyrics, language=language)
-    raw = _complete(packed["provider"], packed["model"], packed["key"], packed["system"], user, temperature=0.95, label="lyrics")
+    raw = _complete(packed["provider"], packed["model"], packed["key"], packed["system"], user, temperature=0.25 if action == "translate" else 0.95, label="lyrics")
     parsed = _parse_writing(raw)
     out_lyrics = str(parsed.get("lyrics") or "").strip()
     out_title = str(parsed.get("title") or "").strip()
@@ -100,13 +134,21 @@ def write(action: str, *, idea: str = "", random: bool = False, title: str = "",
 
 
 def _writing_user(action: str, **fields: Any) -> str:
-    language = fields.get("language") or "en"
+    language = language_instruction(fields.get("language") or "en")
     title = str(fields.get("title") or "").strip()
     description = str(fields.get("description") or "").strip()
     lyrics = str(fields.get("lyrics") or "").strip()
     idea = str(fields.get("idea") or "").strip()
     if action == "optimize":
         task = "Rewrite and structure the current lyrics for YuE2. Keep the meaning. Use clear section tags. Keep the hook and useful chorus repetition. Fix awkward meter and phrasing; leave lines that already work intact."
+    elif action == "translate":
+        task = (
+            "Translate the sung lyrics into English for on-screen display. "
+            "Keep every section tag on its own line, in the same order. "
+            "Output one English line for each original sung line, in the same order. "
+            "Do not add commentary, romanization, extra verses, or a second language. "
+            "This translation is never sung; do not rewrite or replace the original lyrics."
+        )
     elif action == "title":
         task = "Propose one short song title from the lyrics and description. Prefer a memorable phrase or central image. A distinctive hook phrase is acceptable. Preserve a supplied title unless the user asks for a replacement."
     elif fields.get("random"):
@@ -118,7 +160,7 @@ def _writing_user(action: str, **fields: Any) -> str:
     if action == "title":
         return (
             f"{task}\n\n"
-            f"Language: {language}\n"
+            f"{language}\n"
             f"Current title: {title or '(empty)'}\n"
             f"Music description:\n{description or '(none)'}\n\n"
             f"Current lyrics:\n{lyrics or '(empty)'}\n\n"
@@ -127,7 +169,7 @@ def _writing_user(action: str, **fields: Any) -> str:
         )
     return (
         f"{task}\n\n"
-        f"Language: {language}\n"
+        f"{language}\n"
         f"Current title: {title or '(empty)'}\n"
         f"Music description:\n{description or '(none)'}\n\n"
         f"Current lyrics:\n{lyrics or '(empty)'}\n\n"
@@ -139,7 +181,7 @@ def _writing_user(action: str, **fields: Any) -> str:
     )
 
 
-def describe(*, description: str = "", title: str = "", lyrics: str = "", idea: str = "", language: str = "en") -> dict[str, str]:
+def describe(*, description: str = "", title: str = "", lyrics: str = "", idea: str = "", language: str = "en", instrumental: bool = False) -> dict[str, str]:
     """Expand a rough idea into a YuE2 style prompt.
 
     This is the input that actually steers the audio. It runs on the same vault
@@ -155,7 +197,7 @@ def describe(*, description: str = "", title: str = "", lyrics: str = "", idea: 
         raise ValueError("Describe needs a music description, a title, or lyrics to work from")
 
     references = ""  # Do not inject MiniMax's long structured templates into YuE2.
-    user = _caption_user(brief=brief, title=title, lyrics=lyrics, language=language, references=references)
+    user = _caption_user(brief=brief, title=title, lyrics=lyrics, language=language, references=references, instrumental=instrumental)
     # Favor coherent musical direction without adding unnecessary detail.
     raw = _complete(packed["provider"], packed["model"], packed["key"], packed["system"], user, temperature=0.6, label="caption")
     caption = _clean_caption(raw)
@@ -204,7 +246,7 @@ def _chat_user(history: list[dict[str, str]], *, language: str, instrumental: bo
     for item in history:
         speaker = "User" if item["role"] == "user" else "You"
         lines.append(f"{speaker}: {item['content']}")
-    lines += ["", f"Lyrics language: {language}"]
+    lines += ["", language_instruction(language)]
     if instrumental:
         lines.append("The user has the Instrumental switch ON. Plan an instrumental track with no vocals.")
     lines += ["", "Reply to the user's latest message now, following the output contract."]
@@ -235,7 +277,7 @@ def compose(*, idea: str = "", title: str = "", language: str = "en", instrument
     if not seed:
         raise ValueError("Give me a song idea to work from")
 
-    caption_result = describe(idea=seed, title=title, language=language)
+    caption_result = describe(idea=seed, title=title, language=language, instrumental=instrumental)
     caption = caption_result["description"]
 
     if instrumental:
@@ -265,17 +307,23 @@ def compose(*, idea: str = "", title: str = "", language: str = "en", instrument
     }
 
 
-def _caption_user(*, brief: str, title: str, lyrics: str, language: str, references: str) -> str:
+def _caption_user(*, brief: str, title: str, lyrics: str, language: str, references: str, instrumental: bool = False) -> str:
     tagged = _section_tags_in(lyrics)
     parts = [
         "Write one concise YuE2 style prompt for this song.",
         "",
-        f"Language: {language}",
+        language_instruction(language),
         f"Title (context only, never print it): {title or '(untitled)'}",
         "",
         "The user's brief:",
         brief or "(none given - infer a conservative, coherent treatment)",
     ]
+    if instrumental:
+        parts += [
+            "",
+            "This track is INSTRUMENTAL. State instrumental/no vocals. Name a lead instrument. "
+            "Do not describe a singer, choir, rapper, hummed melody, or vocal chops.",
+        ]
     if tagged:
         parts += ["", "Section tags present in the lyrics, in order: " + " ".join(tagged),
                   "Respect these sections if describing an arrangement change; do not expand them into a production report."]

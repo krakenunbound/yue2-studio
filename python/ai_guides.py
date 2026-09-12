@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-GUIDE_VERSION = 3
+GUIDE_VERSION = 4
 
 LYRIC_SECTION_TAGS = (
     "[Intro]", "[Verse]", "[Pre-Chorus]", "[Chorus]", "[Post-Chorus]",
@@ -22,10 +22,15 @@ PERFORMANCE_TAGS = (
     "Spoken", "Spoken Countdown", "Whispered", "Chanted", "Rapped", "Call and Response",
 )
 
-# YuE2's published example uses a short natural-language style prompt.
+# Canonical YuE2 style: official examples/song.json (City Lights).
+# Comma-separated. Language first, then genre, voice, instruments, feel, optional BPM.
+# Do not use YuE v1 space-separated tag soup.
 STYLE_EXAMPLE = (
-    "City pop, upbeat and danceable, groovy bass, electric guitar, bright synths, "
-    "joyful lead vocal, lively city-night atmosphere."
+    "English, warm piano pop, expressive female voice, acoustic piano, "
+    "rounded bass and light drums, lyrical memorable melody, unhurried phrasing, 88 BPM"
+)
+STYLE_EXAMPLE_COVER = (
+    "Jazz-funk, warm lead vocal, Rhodes piano, electric bass, tight drums"
 )
 
 SHARED_RULES = [
@@ -41,8 +46,8 @@ SHARED_RULES = [
 ]
 
 LYRIC_RULES = [
-    "Use familiar section tags on their own lines, such as [Intro], [Verse], [Pre-Chorus], [Chorus], [Interlude], [Bridge], and [Outro]. These are useful conventions, not an exhaustive list of validated control tokens.",
-    "Write in the requested language and script. Preserve Unicode, natural punctuation and intentional code-switching; never transliterate or translate unless asked.",
+    "Use TitleCase section tags on their own lines, such as [Verse] and [Chorus]. Official YuE2 examples use this form, not YuE v1 lowercase [verse]. [Intro], [Pre-Chorus], [Interlude], [Bridge], and [Outro] are useful conventions, not an exhaustive list of validated control tokens.",
+    "Write in the requested sung language and script. If the brief is J-pop, City pop, or otherwise Japanese, write Japanese lyrics in Japanese script — not English, not romaji-only — unless the user explicitly asked for English lyrics. Preserve Unicode, natural punctuation and intentional code-switching; never transliterate or translate unless asked.",
     "Write singable lines with a clear rhythmic shape, a memorable hook and concrete imagery suited to the brief. Avoid filler, but do not ban words or imagery the user requested.",
     "Keep useful chorus repetition. When optimizing, preserve the story, perspective, hook and section order unless a change was requested; repair awkward meter and phrasing without gratuitous rewrites.",
     "Keep production notes, singer descriptions, timestamps and ABC notation out of sung lines. Express whispered, spoken or rapped delivery in the style prompt rather than inventing performance-control tags.",
@@ -51,14 +56,16 @@ LYRIC_RULES = [
 ]
 
 CAPTION_RULES = [
-    "Return one compact natural-language style prompt, usually a comma-separated phrase or one short paragraph. No mandatory headings or named sub-fields.",
-    "Lead with the main genre or compatible genre blend, then tempo feel and groove, core instruments, vocal character if wanted, mood, and one or two useful arrangement or production details.",
-    "Prefer a few concrete, compatible musical choices over a long checklist. A simple brief may need only 15-30 words; normally stay around 30-80 words, extending only when the user's requirements need it.",
+    "Return one compact comma-separated style prompt. No mandatory headings, named sub-fields, JSON, or YuE v1 space-separated tag lists.",
+    "Preferred order: sung language as a full word (Japanese, Korean, English — never an ISO code), genre or compatible blend, vocal character, core instruments, groove or tempo feel, one or two arrangement details, optional BPM as plain text in this string.",
+    "YuE2 has no separate BPM, negative-prompt, reference-audio, or phoneme field. Put tempo and exclusions here. Do not invent those request fields.",
+    "Prefer a few concrete, compatible musical choices over a long checklist. Official examples are often 15-40 words; stay around 30-80 words unless the user's requirements need more.",
     "Preserve requested BPM, key, instruments and exclusions. When unspecified, choose a coherent tempo feel without fabricating technical precision or presenting your choices as user requirements.",
     "Keep distinctive user imagery when it communicates mood. Do not copy lyric lines into the style prompt or invent a separate narrative that competes with the song.",
     "Use arrangement progression only when helpful, such as intimate verses opening into a fuller chorus. Respect supplied lyric sections; do not add a mandatory section-by-section production report.",
     "For instrumentals, describe the lead instrument and state instrumental/no vocals. Do not add a vocal role, singer label, choir or backing vocals.",
     "Describe voices through timbre, register and delivery. Do not promise voice cloning or exact identity. A voice description is musical guidance.",
+    "Do not paste planning-mode words (full, melody, off, CoT) or ABC into the style prompt. Those are app controls.",
     "Return only the style text. No title, lyrics, score, JSON, markdown fences, headings or explanatory preamble.",
 ]
 
@@ -142,8 +149,10 @@ def chat_system() -> str:
         f"Write your reply to the user first. Then, on its own line, write exactly {BRIEF_MARKER}\n"
         "and after it a consolidated music brief for the writing stage.\n\n"
         "The brief is read by another model, never shown to the user. Write it as plain\n"
-        "prose, two to five sentences, naming: genre and subgenre, tempo feel, the mood\n"
-        "arc, the vocal treatment, the core instruments, and what the song is about.\n"
+        "prose, two to five sentences, naming: sung language as a full word, genre and\n"
+        "subgenre, tempo feel, the mood arc, the vocal treatment, the core instruments,\n"
+        "and what the song is about. J-pop and City pop default to Japanese lyrics;\n"
+        "K-pop defaults to Korean. Do not switch those to English unless asked.\n"
         "Carry forward everything the user has said across the whole conversation, not\n"
         "only their latest message. Do not write the style prompt or the lyrics —\n"
         "later stages do that.\n\n"
@@ -190,6 +199,7 @@ def catalog() -> dict[str, Any]:
             "summary": "Music Description follows the compact YuE2 style prompt.",
             "rules": SHARED_RULES + CAPTION_RULES,
             "example": STYLE_EXAMPLE,
+            "cover_example": STYLE_EXAMPLE_COVER,
             "constraints": {"kind": "text", "engine": "yue2", "shape": "style-prompt"},
         },
         "images": {

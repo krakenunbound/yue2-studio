@@ -1154,8 +1154,13 @@ function SongStudioView({ song, mixUrl, stemJob, stemsReady, soundEffectsReady, 
           </article>; })}
         </div>
         {tracks.length === 1 && <div className="studio-empty">
-          <strong>{extractionActive ? stemJob?.phase : "This song has not been separated yet"}</strong>
-          <p>{extractionActive ? "Demucs is creating Vocals, Drums, Bass and Other locally on the GPU. The lanes will appear here automatically." : "Create four honest source-separated lanes. The original mix remains untouched."}</p>
+          <strong>{extractionActive ? stemJob?.phase : stemJob?.status === "failed" ? "Stem split failed" : "This song has not been separated yet"}</strong>
+          <p>{extractionActive
+            ? (stemJob?.status === "queued"
+              ? "Waiting for the current studio job to finish. Vocals, Drums, Bass and Other will appear here automatically."
+              : "Demucs is creating Vocals, Drums, Bass and Other locally on the GPU. The lanes will appear here automatically.")
+            : "Create four honest source-separated lanes. The original mix remains untouched."}</p>
+          {stemJob?.status === "failed" && <p className="error">{stemJob.error || "Stem extraction failed."}</p>}
           {extractionActive ? <div className="progress"><i style={{ width: `${Math.round((stemJob?.progress ?? 0) * 100)}%` }} /></div> : <button className="primary" disabled={!stemsReady} onClick={onStartStems}>Split into 4 stems</button>}
         </div>}
       </main>

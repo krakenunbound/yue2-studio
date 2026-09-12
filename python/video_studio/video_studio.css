@@ -316,6 +316,10 @@ body.embedded .back-link {
     flex: 1 1 0;
 }
 
+.dual-lyrics-row {
+    margin-top: 8px;
+}
+
 .range-field,
 .color-field,
 .volume-wrap {

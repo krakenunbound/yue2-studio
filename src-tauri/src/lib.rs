@@ -29,7 +29,6 @@ const SIDECAR_BOOT_TIMEOUT: Duration = Duration::from_secs(20);
 struct InstanceLock {
     _listener: Option<TcpListener>,
 }
-
 fn take_instance_lock() -> Option<TcpListener> {
     let listener = TcpListener::bind((SIDECAR_HOST, INSTANCE_LOCK_PORT)).ok()?;
     let _ = listener.set_nonblocking(true);

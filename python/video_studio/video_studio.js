@@ -72,6 +72,9 @@ const elements = {
     particleCount: document.getElementById("particle-count"),
     lyricsOn: document.getElementById("lyrics-on"),
     lyricsOff: document.getElementById("lyrics-off"),
+    dualLyricsRow: document.getElementById("dual-lyrics-row"),
+    dualOn: document.getElementById("dual-on"),
+    dualOff: document.getElementById("dual-off"),
     lyricsStatus: document.getElementById("lyrics-status"),
     syncLyrics: document.getElementById("sync-lyrics"),
     coverStatus: document.getElementById("cover-status"),
@@ -95,11 +98,15 @@ const state = {
     particleStyle: "dust",
     particleCount: Number(elements.particleCount.value),
     lyricsEnabled: Boolean(initialLyricsUrl),
+    dualLyrics: true,
     lyricLines: [],
     lyricsLanguage: "en",
     currentLyricsUrl: initialLyricsUrl,
     lyricsSyncJobId: "",
     lyricsPollTimer: null,
+    lyricsSyncBusy: false,
+    lyricsPollFailures: 0,
+    audioSrcBackup: "",
     songHasAlignableLyrics: false,
     imageUrl: "",
     videoUrl: "",
@@ -133,12 +140,42 @@ function notifyMainStudioPlayback() {
 
 const PARTICLE_STYLES = {
     dust: "Floating dust motes drifting across the frame.",
-    rain: "A sheet of rain falling in one wind, with longer downward streaks.",
-    stars: "Twinkling starfield with occasional shooting stars.",
+    rain: "A rain sheet: thin vertical streaks, nearer drops longer and faster.",
+    stars: "Twinkling starfield with occasional falling shooting stars.",
     embers: "Rising embers that climb the full frame and fade near the top.",
     warp: "A star-tunnel rush out from the cover art.",
-    sparks: "Audio-reactive sparks bursting from the visualizer ring.",
+    notes: "Music notes drifting up around the cover.",
+    bokeh: "Soft out-of-focus orbs drifting with the beat.",
+    snow: "Slow flakes falling with a gentle wobble.",
+    bubbles: "Soap bubbles rising and popping at the top.",
 };
+
+function visualCenter(width, height) {
+    const portrait = state.aspectMode === "portrait";
+    const lyricsNeedCenterStage = state.lyricsEnabled && lyricsAreCentered();
+    return {
+        x: width / 2,
+        // Split, Skyline, and Peak reserve the middle of the frame for
+        // karaoke. Keep the cover above that lane instead of painting it
+        // underneath the sung and translated lines.
+        y: portrait
+            ? (lyricsNeedCenterStage ? height * 0.16 : height * 0.39)
+            : (lyricsNeedCenterStage ? height * 0.21 : (height / 2) - 40),
+        radius: Math.min(width, height) * (portrait ? 0.19 : 0.14),
+    };
+}
+
+function vizFocus(width, height) {
+    if (state.centerImage) {
+        return visualCenter(width, height);
+    }
+    const portrait = state.aspectMode === "portrait";
+    return {
+        x: width / 2,
+        y: portrait ? height * 0.4 : height * 0.45,
+        radius: 0,
+    };
+}
 
 let fxParticles = [];
 let shootingStars = [];
@@ -157,6 +194,98 @@ function formatDuration(seconds) {
 
 function setStatus(target, message) {
     target.textContent = message;
+}
+
+async function fetchJson(url, options = {}, timeoutMs = 8000) {
+    const abort = new AbortController();
+    const timer = window.setTimeout(() => abort.abort(), timeoutMs);
+    try {
+        const response = await fetch(url, { cache: "no-store", ...options, signal: abort.signal });
+        let payload = {};
+        try {
+            payload = await response.json();
+        } catch {
+            payload = {};
+        }
+        return { response, payload };
+    } finally {
+        window.clearTimeout(timer);
+    }
+}
+
+function jobErrorDetail(payload, fallback) {
+    const detail = payload?.detail;
+    if (typeof detail === "string" && detail) {
+        return detail;
+    }
+    return fallback;
+}
+
+function jobKindLabel(kind) {
+    return {
+        yue2: "song generation",
+        music3: "song generation",
+        cover_art: "cover art",
+        stems: "stem extraction",
+        audio_export: "audio export",
+        lyrics_sync: "another lyric sync",
+        stable_sfx: "sound-effect generation",
+    }[kind] || "another studio job";
+}
+
+function queuedLyricsStatus(blocker) {
+    if (blocker?.kind) {
+        return `Queued behind ${jobKindLabel(blocker.kind)}. Lyric sync starts when that job finishes.`;
+    }
+    return "Queued. Lyric sync starts when the studio is free.";
+}
+
+async function findBlockingJob(lyricsJobId) {
+    try {
+        const { response, payload } = await fetchJson("/api/status", {}, 5000);
+        if (!response.ok) {
+            return null;
+        }
+        return (payload.jobs || []).find((item) => item.status === "running" && item.id !== lyricsJobId) || null;
+    } catch {
+        return null;
+    }
+}
+
+function releaseAudioForSync() {
+    if (state.audioSrcBackup) {
+        return;
+    }
+    state.audioSrcBackup = elements.audio.currentSrc || elements.audio.src || audioUrl;
+    elements.audio.pause();
+    elements.audio.removeAttribute("src");
+    elements.audio.load();
+}
+
+function restoreAudioAfterSync() {
+    const src = state.audioSrcBackup;
+    if (!src) {
+        return;
+    }
+    state.audioSrcBackup = "";
+    if (elements.audio.src !== src) {
+        elements.audio.src = src;
+    }
+}
+
+function clearLyricsPoll() {
+    if (state.lyricsPollTimer) {
+        window.clearTimeout(state.lyricsPollTimer);
+        state.lyricsPollTimer = null;
+    }
+}
+
+function scheduleLyricsPoll(jobId, delayMs) {
+    clearLyricsPoll();
+    if (!jobId) {
+        return;
+    }
+    state.lyricsPollTimer = window.setTimeout(() => pollLyricsSyncJob(jobId), delayMs);
 }
 
 function setButtonBusy(button, busy, busyLabel, idleLabel) {
@@ -222,6 +351,21 @@ function setLyricsEnabled(enabled) {
     elements.lyricsOff.classList.toggle("active", !state.lyricsEnabled);
 }
 
+function hasLyricTranslations() {
+    return state.lyricLines.some((line) => line.translation);
+}
+
+function setDualLyrics(enabled) {
+    state.dualLyrics = Boolean(enabled) && hasLyricTranslations();
+    if (elements.dualLyricsRow) {
+        elements.dualLyricsRow.hidden = !hasLyricTranslations();
+    }
+    if (elements.dualOn) {
+        elements.dualOn.classList.toggle("active", state.dualLyrics);
+        elements.dualOff.classList.toggle("active", !state.dualLyrics);
+    }
+}
+
 function canAlignLyrics(song) {
     return Boolean((song?.lyrics || "").trim())
         && !song?.instrumental
@@ -285,12 +429,91 @@ function loadVideo(url) {
 }
 
 function blendColor(alpha, color) {
+    if (typeof color === "string" && color.trim().toLowerCase().startsWith("hsl")) {
+        const open = color.indexOf("(");
+        const close = color.lastIndexOf(")");
+        const channels = color.slice(open + 1, close).split(",").slice(0, 3).join(",").trim();
+        return `hsla(${channels}, ${alpha})`;
+    }
     const hex = color.replace("#", "");
     const normalized = hex.length === 3 ? hex.split("").map((value) => value + value).join("") : hex;
     const red = Number.parseInt(normalized.slice(0, 2), 16);
     const green = Number.parseInt(normalized.slice(2, 4), 16);
     const blue = Number.parseInt(normalized.slice(4, 6), 16);
     return `rgba(${red}, ${green}, ${blue}, ${alpha})`;
+}
+
+function colorToHsl(color) {
+    const hex = color.replace("#", "");
+    const normalized = hex.length === 3 ? hex.split("").map((value) => value + value).join("") : hex;
+    const red = Number.parseInt(normalized.slice(0, 2), 16) / 255;
+    const green = Number.parseInt(normalized.slice(2, 4), 16) / 255;
+    const blue = Number.parseInt(normalized.slice(4, 6), 16) / 255;
+    const max = Math.max(red, green, blue);
+    const min = Math.min(red, green, blue);
+    const lightness = (max + min) / 2;
+    const delta = max - min;
+    if (!delta) {
+        return { h: 0, s: 0, l: lightness * 100 };
+    }
+    const saturation = delta / (1 - Math.abs(2 * lightness - 1));
+    let hue;
+    if (max === red) {
+        hue = ((green - blue) / delta) % 6;
+    } else if (max === green) {
+        hue = (blue - red) / delta + 2;
+    } else {
+        hue = (red - green) / delta + 4;
+    }
+    return {
+        h: (hue * 60 + 360) % 360,
+        s: saturation * 100,
+        l: lightness * 100,
+    };
+}
+
+let huePaletteCache = { primary: "", secondary: "", primaryHsl: null, secondaryHsl: null };
+
+function huePalette() {
+    if (huePaletteCache.primary !== state.primaryColor || huePaletteCache.secondary !== state.secondaryColor) {
+        huePaletteCache = {
+            primary: state.primaryColor,
+            secondary: state.secondaryColor,
+            primaryHsl: colorToHsl(state.primaryColor),
+            secondaryHsl: colorToHsl(state.secondaryColor),
+        };
+    }
+    return huePaletteCache;
+}
+
+function interpolateHue(start, end, amount) {
+    const delta = ((end - start + 540) % 360) - 180;
+    return (start + delta * amount + 360) % 360;
+}
+
+function hueColor(t, alpha = 0.92) {
+    const normalized = ((t % 1) + 1) % 1;
+    const { primaryHsl, secondaryHsl } = huePalette();
+    const delta = ((secondaryHsl.h - primaryHsl.h + 540) % 360) - 180;
+    const direction = delta < 0 ? -1 : 1;
+    // A derived midpoint bends the route through a third hue, so a two-color
+    // template becomes a small spectrum instead of alternating two literals.
+    const midpoint = (primaryHsl.h + delta * 0.5 + direction * 28 + 360) % 360;
+    const hue = normalized < 0.5
+        ? interpolateHue(primaryHsl.h, midpoint, normalized * 2)
+        : interpolateHue(midpoint, secondaryHsl.h, (normalized - 0.5) * 2);
+    const saturation = Math.max(58, Math.min(98, primaryHsl.s * (1 - normalized) + secondaryHsl.s * normalized + Math.sin(normalized * Math.PI) * 5));
+    const lightness = Math.max(48, Math.min(72, primaryHsl.l * (1 - normalized) + secondaryHsl.l * normalized + Math.sin(normalized * Math.PI) * 4));
+    return `hsla(${hue}, ${saturation}%, ${lightness}%, ${alpha})`;
+}
+
+function fullSpectrumColor(t, alpha = 0.92) {
+    const normalized = ((t % 1) + 1) % 1;
+    const { primaryHsl, secondaryHsl } = huePalette();
+    const anchor = interpolateHue(primaryHsl.h, secondaryHsl.h, 0.28);
+    const saturation = Math.max(72, Math.min(98, (primaryHsl.s + secondaryHsl.s) * 0.5 + 8));
+    const lightness = Math.max(52, Math.min(68, (primaryHsl.l + secondaryHsl.l) * 0.5 + 4));
+    return `hsla(${(anchor + normalized * 360) % 360}, ${saturation}%, ${lightness}%, ${alpha})`;
 }
 
 function averageLevel(data) {
@@ -311,9 +534,11 @@ function drawBackground(width, height, energy) {
         ctx.drawImage(backgroundImage, 0, 0, width, height);
     } else {
         const gradient = ctx.createLinearGradient(0, 0, width, height);
-        gradient.addColorStop(0, blendColor(0.9, state.primaryColor));
+        gradient.addColorStop(0, hueColor(0, 0.9));
+        gradient.addColorStop(0.28, hueColor(0.25, 0.66));
         gradient.addColorStop(0.5, "rgba(6, 10, 18, 0.96)");
-        gradient.addColorStop(1, blendColor(0.9, state.secondaryColor));
+        gradient.addColorStop(0.72, hueColor(0.68, 0.66));
+        gradient.addColorStop(1, hueColor(0.99, 0.9));
         ctx.fillStyle = gradient;
         ctx.fillRect(0, 0, width, height);
     }
@@ -329,17 +554,81 @@ function drawBackground(width, height, energy) {
         height * 0.18,
         width * 0.48,
     );
-    highlight.addColorStop(0, blendColor(0.16 + energy * 0.0005, state.secondaryColor));
+    highlight.addColorStop(0, hueColor(0.72, 0.16 + energy * 0.0005));
     highlight.addColorStop(1, "rgba(0, 0, 0, 0)");
     ctx.fillStyle = highlight;
     ctx.fillRect(0, 0, width, height);
 }
 
+function drawCinematicAtmosphere(width, height, energy) {
+    const clock = vizClock();
+    const beat = energy / 255;
+    const span = Math.min(width, height);
+    const drift = clock * 0.16;
+
+    ctx.save();
+    ctx.globalCompositeOperation = "screen";
+    const blooms = [
+        {
+            x: width * (0.22 + Math.sin(drift) * 0.08),
+            y: height * (0.26 + Math.cos(drift * 0.83) * 0.08),
+            radius: span * (0.44 + beat * 0.08),
+            color: state.primaryColor,
+        },
+        {
+            x: width * (0.78 + Math.cos(drift * 0.72) * 0.08),
+            y: height * (0.66 + Math.sin(drift * 0.91) * 0.06),
+            radius: span * (0.5 + beat * 0.1),
+            color: state.secondaryColor,
+        },
+        {
+            x: width * (0.5 + Math.sin(drift * 0.55) * 0.05),
+            y: height * 0.42,
+            radius: span * (0.28 + beat * 0.05),
+            color: hueColor(0.5, 1),
+            derived: true,
+        },
+    ];
+    for (const bloom of blooms) {
+        const glow = ctx.createRadialGradient(bloom.x, bloom.y, 0, bloom.x, bloom.y, bloom.radius);
+        const colorAt = (alpha) => bloom.derived ? hueColor(0.5, alpha) : blendColor(alpha, bloom.color);
+        glow.addColorStop(0, colorAt(0.075 + beat * 0.045));
+        glow.addColorStop(0.52, colorAt(0.022 + beat * 0.016));
+        glow.addColorStop(1, "rgba(0, 0, 0, 0)");
+        ctx.fillStyle = glow;
+        ctx.fillRect(0, 0, width, height);
+    }
+
+    const horizonY = height * (state.aspectMode === "portrait" ? 0.62 : 0.72);
+    const horizon = ctx.createLinearGradient(0, horizonY - span * 0.08, 0, horizonY + span * 0.12);
+    horizon.addColorStop(0, "rgba(0, 0, 0, 0)");
+    horizon.addColorStop(0.5, blendColor(0.045 + beat * 0.035, state.secondaryColor));
+    horizon.addColorStop(1, "rgba(0, 0, 0, 0)");
+    ctx.fillStyle = horizon;
+    ctx.fillRect(0, horizonY - span * 0.08, width, span * 0.2);
+
+    ctx.globalCompositeOperation = "source-over";
+    const vignette = ctx.createRadialGradient(
+        width / 2,
+        height * 0.44,
+        span * 0.16,
+        width / 2,
+        height * 0.44,
+        Math.max(width, height) * 0.76,
+    );
+    vignette.addColorStop(0, "rgba(0, 0, 0, 0)");
+    vignette.addColorStop(0.72, "rgba(0, 0, 0, 0.08)");
+    vignette.addColorStop(1, "rgba(0, 0, 0, 0.42)");
+    ctx.fillStyle = vignette;
+    ctx.fillRect(0, 0, width, height);
+    ctx.restore();
+}
+
 function particleColor(alpha, index, hot = false) {
     if (hot) {
-        return blendColor(alpha, index % 2 === 0 ? "#ffb14a" : state.primaryColor);
+        return hueColor(index / Math.max(1, state.particleCount) + 0.12, alpha);
     }
-    return blendColor(alpha, index % 2 === 0 ? state.primaryColor : state.secondaryColor);
+    return hueColor(index / Math.max(1, state.particleCount), alpha);
 }
 
 function createFxParticle(style, width, height, scatter, index = 0) {
@@ -357,18 +646,15 @@ function createFxParticle(style, width, height, scatter, index = 0) {
     };
 
     if (style === "rain") {
-        // Shared wind + faster fall. Per-drop gust and short dashes read as
-        // confetti instead of weather.
-        const depth = 0.12 + Math.pow(Math.random(), 0.72) * 0.88;
-        const lean = 0.26;
+        const depth = 0.18 + Math.pow(Math.random(), 0.65) * 0.82;
         particle.streak = true;
         particle.depth = depth;
-        particle.x = Math.random() * (width + height * lean) - height * lean * 0.35;
-        particle.y = scatter ? Math.random() * height : -Math.random() * 90;
-        particle.fall = (13 + Math.random() * 12) * (0.55 + depth);
-        particle.length = 26 + depth * 52;
-        particle.size = 0.7 + depth * 1.15;
-        particle.alpha = 0.2 + depth * 0.42;
+        particle.x = Math.random() * (width + 80) - 40;
+        particle.y = scatter ? Math.random() * height : -Math.random() * 120;
+        particle.fall = (20 + Math.random() * 16) * (0.55 + depth);
+        particle.length = 38 + depth * 78;
+        particle.size = 0.45 + depth * 0.7;
+        particle.alpha = 0.18 + depth * 0.38;
     } else if (style === "stars") {
         particle.size = 0.5 + Math.random() * 1.8;
         particle.baseAlpha = 0.28 + Math.random() * 0.62;
@@ -393,17 +679,42 @@ function createFxParticle(style, width, height, scatter, index = 0) {
         particle.depthSpeed = 0.006 + Math.random() * 0.008;
         particle.size = 0.6 + Math.random() * 1.4;
         particle.alpha = 0.45 + Math.random() * 0.45;
-        particle.prevX = width / 2;
-        particle.prevY = height / 2;
-    } else if (style === "sparks") {
-        const angle = Math.random() * Math.PI * 2;
-        particle.x = width / 2;
-        particle.y = height / 2;
-        particle.vx = Math.cos(angle) * (1.2 + Math.random() * 2.4);
-        particle.vy = Math.sin(angle) * (1.2 + Math.random() * 2.4);
-        particle.size = 1.1 + Math.random() * 1.8;
-        particle.life = 0.35 + Math.random() * 0.55;
-        particle.alpha = 0.75;
+        const center = vizFocus(width, height);
+        particle.prevX = center.x;
+        particle.prevY = center.y;
+    } else if (style === "notes") {
+        particle.x = Math.random() * width;
+        particle.y = scatter ? Math.random() * height : height + 20 + Math.random() * 70;
+        particle.vx = (Math.random() - 0.5) * 0.55;
+        particle.vy = -(0.65 + Math.random() * 1.35) * Math.max(0.85, height / 720);
+        particle.size = 7 + Math.random() * 11;
+        particle.alpha = 0.42 + Math.random() * 0.42;
+        particle.rotation = Math.random() * Math.PI;
+        particle.spin = (Math.random() - 0.5) * 0.05;
+    } else if (style === "bokeh") {
+        particle.size = 10 + Math.random() * 28;
+        particle.vx = (Math.random() - 0.5) * 0.22;
+        particle.vy = (Math.random() - 0.5) * 0.18;
+        particle.alpha = 0.08 + Math.random() * 0.12;
+        particle.twinklePhase = Math.random() * Math.PI * 2;
+        particle.twinkleSpeed = 0.008 + Math.random() * 0.02;
+    } else if (style === "snow") {
+        particle.x = Math.random() * width;
+        particle.y = scatter ? Math.random() * height : -Math.random() * 40;
+        particle.vx = 0;
+        particle.vy = 0.55 + Math.random() * 1.1;
+        particle.size = 1.2 + Math.random() * 2.6;
+        particle.alpha = 0.35 + Math.random() * 0.45;
+        particle.wobble = Math.random() * Math.PI * 2;
+    } else if (style === "bubbles") {
+        particle.x = Math.random() * width;
+        particle.y = scatter ? Math.random() * height : height + Math.random() * 40;
+        particle.vx = (Math.random() - 0.5) * 0.28;
+        particle.vy = -(0.4 + Math.random() * 0.95) * Math.max(0.85, height / 720);
+        particle.size = 6 + Math.random() * 16;
+        particle.alpha = 0.22 + Math.random() * 0.18;
+        particle.wobble = Math.random() * Math.PI * 2;
+        particle.spin = 0.02 + Math.random() * 0.03;
     } else {
         const angle = Math.random() * Math.PI * 2;
         const speed = 0.12 + Math.random() * 0.45;
@@ -418,9 +729,10 @@ function createFxParticle(style, width, height, scatter, index = 0) {
 }
 
 function projectWarpParticle(particle, width, height, resetTrail) {
+    const center = vizFocus(width, height);
     const scale = Math.max(width, height) * 0.58;
-    const x = width * 0.5 + (particle.warpX * scale) / Math.max(0.02, particle.z);
-    const y = height * 0.5 + (particle.warpY * scale) / Math.max(0.02, particle.z);
+    const x = center.x + (particle.warpX * scale) / Math.max(0.02, particle.z);
+    const y = center.y + (particle.warpY * scale) / Math.max(0.02, particle.z);
     if (resetTrail || !Number.isFinite(particle.x)) {
         particle.prevX = x;
         particle.prevY = y;
@@ -459,24 +771,20 @@ function ensureParticles(width, height) {
 }
 
 function spawnShootingStar(width, height) {
-    const fromTop = Math.random() < 0.55;
-    const startX = fromTop ? Math.random() * width : (Math.random() < 0.5 ? -40 : width + 40);
-    const startY = fromTop ? -30 : Math.random() * height * 0.45;
-    const targetX = width * (0.25 + Math.random() * 0.5);
-    const targetY = height * (0.35 + Math.random() * 0.35);
-    const dx = targetX - startX;
-    const dy = targetY - startY;
-    const distance = Math.hypot(dx, dy) || 1;
-    const speed = 7 + Math.random() * 6;
+    const fromLeft = Math.random() < 0.5;
+    const startX = fromLeft ? Math.random() * width * 0.75 : width * (0.25 + Math.random() * 0.75);
+    const startY = -24 - Math.random() * 50;
+    const tilt = (fromLeft ? 1 : -1) * (0.2 + Math.random() * 0.26);
+    const speed = 10 + Math.random() * 8;
     shootingStars.push({
         x: startX,
         y: startY,
-        vx: (dx / distance) * speed,
-        vy: (dy / distance) * speed,
-        life: 28 + Math.random() * 18,
-        maxLife: 40,
-        tail: 18 + Math.random() * 22,
-        brightness: 0.7 + Math.random() * 0.3,
+        vx: Math.sin(tilt) * speed,
+        vy: Math.cos(tilt) * speed,
+        life: 34 + Math.random() * 16,
+        maxLife: 50,
+        tail: 22 + Math.random() * 18,
+        brightness: 0.78 + Math.random() * 0.22,
     });
 }
 
@@ -489,6 +797,47 @@ function setParticleStyle(style) {
     if (elements.particleStatus) {
         setStatus(elements.particleStatus, PARTICLE_STYLES[state.particleStyle]);
     }
+}
+
+function drawBubble(drawCtx, x, y, size, wobble) {
+    const squash = 1 + Math.sin(wobble) * 0.07;
+    drawCtx.save();
+    drawCtx.translate(x, y);
+    drawCtx.scale(squash, 2 - squash);
+    const fill = drawCtx.createRadialGradient(-size * 0.28, -size * 0.32, size * 0.08, 0, 0, size);
+    fill.addColorStop(0, "rgba(255,255,255,0.22)");
+    fill.addColorStop(0.4, "rgba(190,230,255,0.06)");
+    fill.addColorStop(0.78, "rgba(140,190,230,0.05)");
+    fill.addColorStop(1, "rgba(230,250,255,0.28)");
+    drawCtx.fillStyle = fill;
+    drawCtx.beginPath();
+    drawCtx.arc(0, 0, size, 0, Math.PI * 2);
+    drawCtx.fill();
+    drawCtx.strokeStyle = "rgba(220,245,255,0.55)";
+    drawCtx.lineWidth = Math.max(1, size * 0.055);
+    drawCtx.stroke();
+    drawCtx.strokeStyle = "rgba(255,170,210,0.2)";
+    drawCtx.lineWidth = Math.max(0.8, size * 0.035);
+    drawCtx.beginPath();
+    drawCtx.arc(0, 0, size * 0.9, 0.15, 1.35);
+    drawCtx.stroke();
+    drawCtx.fillStyle = "rgba(255,255,255,0.8)";
+    drawCtx.beginPath();
+    drawCtx.ellipse(-size * 0.3, -size * 0.34, size * 0.16, size * 0.1, -0.5, 0, Math.PI * 2);
+    drawCtx.fill();
+    drawCtx.restore();
+}
+
+function drawMusicNote(drawCtx, x, y, size, rotation, color) {
+    drawCtx.save();
+    drawCtx.translate(x, y);
+    drawCtx.rotate(rotation);
+    drawCtx.fillStyle = color;
+    drawCtx.beginPath();
+    drawCtx.ellipse(0, size * 0.32, size * 0.42, size * 0.28, -0.45, 0, Math.PI * 2);
+    drawCtx.fill();
+    drawCtx.fillRect(size * 0.26, -size * 0.92, Math.max(1.4, size * 0.12), size * 1.18);
+    drawCtx.restore();
 }
 
 function drawParticles(width, height, energy) {
@@ -504,7 +853,7 @@ function drawParticles(width, height, energy) {
     const style = state.particleStyle;
 
     ctx.save();
-    ctx.globalCompositeOperation = "lighter";
+    ctx.globalCompositeOperation = (style === "rain" || style === "bubbles") ? "source-over" : "lighter";
 
     for (let index = 0; index < fxParticles.length; index += 1) {
         const particle = fxParticles[index];
@@ -513,23 +862,27 @@ function drawParticles(width, height, energy) {
             if (!particle.streak) {
                 Object.assign(particle, createFxParticle("rain", width, height, true, particle.index));
             }
-            // One wind angle for every drop. A tiny shared gust keeps the
-            // sheet alive without scattering streaks into confetti.
-            const wind = 0.24 + Math.sin(now * 0.00055) * 0.035;
-            const fall = particle.fall * (0.92 + energyBoost * 0.12);
-            const vx = Math.sin(wind) * fall;
-            const vy = Math.cos(wind) * fall;
+            const wind = Math.sin(now * 0.00028) * 0.11;
+            const fall = particle.fall * (0.95 + energyBoost * 0.08);
+            const vx = wind * fall;
+            const vy = fall;
             particle.x += vx * delta;
             particle.y += vy * delta;
-            if (particle.y > height + 50 || particle.x > width + 50) {
+            if (particle.y > height + 60 || particle.x < -50 || particle.x > width + 50) {
                 Object.assign(particle, createFxParticle("rain", width, height, false, particle.index));
             }
             const speed = Math.hypot(vx, vy) || 1;
-            ctx.strokeStyle = `rgba(198, 226, 242, ${particle.alpha})`;
+            const tailX = particle.x - (vx / speed) * particle.length;
+            const tailY = particle.y - (vy / speed) * particle.length;
+            const streak = ctx.createLinearGradient(tailX, tailY, particle.x, particle.y);
+            streak.addColorStop(0, "rgba(170, 205, 230, 0)");
+            streak.addColorStop(0.65, `rgba(190, 220, 240, ${particle.alpha * 0.45})`);
+            streak.addColorStop(1, `rgba(236, 246, 255, ${particle.alpha})`);
+            ctx.strokeStyle = streak;
             ctx.lineWidth = particle.size;
-            ctx.lineCap = "round";
+            ctx.lineCap = "butt";
             ctx.beginPath();
-            ctx.moveTo(particle.x - (vx / speed) * particle.length, particle.y - (vy / speed) * particle.length);
+            ctx.moveTo(tailX, tailY);
             ctx.lineTo(particle.x, particle.y);
             ctx.stroke();
         } else if (style === "stars") {
@@ -584,23 +937,46 @@ function drawParticles(width, height, energy) {
                 ctx.fill();
             }
             ctx.lineCap = "butt";
-        } else if (style === "sparks") {
-            particle.x += particle.vx * energyBoost * delta;
+        } else if (style === "notes") {
+            particle.rotation += particle.spin * delta;
+            particle.x += (particle.vx + Math.sin(now * 0.0018 + particle.seed) * 0.45) * delta;
             particle.y += particle.vy * energyBoost * delta;
-            particle.vx *= 0.985;
-            particle.vy *= 0.985;
-            particle.life -= 0.012 * delta;
-            if (particle.life <= 0 || particle.x < -20 || particle.x > width + 20 || particle.y < -20 || particle.y > height + 20) {
-                Object.assign(particle, createFxParticle("sparks", width, height, false, particle.index));
-                const radius = Math.min(width, height) * 0.16;
-                const angle = Math.random() * Math.PI * 2;
-                particle.x = width / 2 + Math.cos(angle) * radius;
-                particle.y = height / 2 + Math.sin(angle) * radius;
+            if (particle.y < -50 || particle.x < -40 || particle.x > width + 40) {
+                Object.assign(particle, createFxParticle("notes", width, height, false, particle.index));
             }
-            ctx.fillStyle = particleColor(Math.max(0.08, particle.life * particle.alpha), index, true);
+            drawMusicNote(ctx, particle.x, particle.y, particle.size * (0.9 + energyBoost * 0.08), particle.rotation, particleColor(particle.alpha, index, true));
+        } else if (style === "bokeh") {
+            particle.twinklePhase += particle.twinkleSpeed * delta;
+            particle.x += particle.vx * delta;
+            particle.y += particle.vy * delta;
+            if (particle.x < -40) particle.x = width + 40;
+            if (particle.x > width + 40) particle.x = -40;
+            if (particle.y < -40) particle.y = height + 40;
+            if (particle.y > height + 40) particle.y = -40;
+            const pulse = 0.7 + 0.3 * (0.5 + 0.5 * Math.sin(particle.twinklePhase)) + (energy / 255) * 0.25;
+            ctx.fillStyle = particleColor(particle.alpha * pulse, index);
             ctx.beginPath();
-            ctx.arc(particle.x, particle.y, particle.size * (0.7 + energyBoost * 0.2), 0, Math.PI * 2);
+            ctx.arc(particle.x, particle.y, particle.size * pulse, 0, Math.PI * 2);
             ctx.fill();
+        } else if (style === "snow") {
+            particle.wobble += 0.025 * delta;
+            particle.x += Math.sin(particle.wobble) * 0.55 * delta;
+            particle.y += particle.vy * (0.85 + energyBoost * 0.12) * delta;
+            if (particle.y > height + 12 || particle.x < -12 || particle.x > width + 12) {
+                Object.assign(particle, createFxParticle("snow", width, height, false, particle.index));
+            }
+            ctx.fillStyle = `rgba(236, 246, 255, ${particle.alpha})`;
+            ctx.beginPath();
+            ctx.arc(particle.x, particle.y, particle.size, 0, Math.PI * 2);
+            ctx.fill();
+        } else if (style === "bubbles") {
+            particle.wobble += 0.04 * delta;
+            particle.x += (particle.vx + Math.sin(particle.wobble) * 0.4) * delta;
+            particle.y += particle.vy * energyBoost * delta;
+            if (particle.y < -30 || particle.x < -30 || particle.x > width + 30) {
+                Object.assign(particle, createFxParticle("bubbles", width, height, false, particle.index));
+            }
+            drawBubble(ctx, particle.x, particle.y, particle.size, particle.wobble);
         } else {
             particle.x += particle.vx * delta;
             particle.y += particle.vy * delta;
@@ -627,12 +1003,22 @@ function drawParticles(width, height, energy) {
             star.y += star.vy * delta;
             star.life -= delta;
             const fade = Math.max(0, star.life / star.maxLife);
-            ctx.strokeStyle = `rgba(255,255,255,${fade * star.brightness})`;
-            ctx.lineWidth = 1.4 + fade;
+            const tailX = star.x - star.vx * star.tail * 0.42;
+            const tailY = star.y - star.vy * star.tail * 0.42;
+            const trail = ctx.createLinearGradient(tailX, tailY, star.x, star.y);
+            trail.addColorStop(0, "rgba(255,255,255,0)");
+            trail.addColorStop(1, `rgba(255,255,255,${fade * star.brightness})`);
+            ctx.strokeStyle = trail;
+            ctx.lineWidth = 1.2 + fade * 1.4;
+            ctx.lineCap = "round";
             ctx.beginPath();
-            ctx.moveTo(star.x, star.y);
-            ctx.lineTo(star.x - star.vx * star.tail * 0.35, star.y - star.vy * star.tail * 0.35);
+            ctx.moveTo(tailX, tailY);
+            ctx.lineTo(star.x, star.y);
             ctx.stroke();
+            ctx.fillStyle = `rgba(255,255,255,${fade * star.brightness})`;
+            ctx.beginPath();
+            ctx.arc(star.x, star.y, 1.4 + fade, 0, Math.PI * 2);
+            ctx.fill();
             if (star.life <= 0) {
                 shootingStars.splice(index, 1);
             }
@@ -652,8 +1038,9 @@ function drawCover(centerX, centerY, radius) {
         ctx.drawImage(coverImage, centerX - radius, centerY - radius, radius * 2, radius * 2);
     } else {
         const gradient = ctx.createLinearGradient(centerX - radius, centerY - radius, centerX + radius, centerY + radius);
-        gradient.addColorStop(0, state.primaryColor);
-        gradient.addColorStop(1, state.secondaryColor);
+        gradient.addColorStop(0, hueColor(0, 1));
+        gradient.addColorStop(0.5, hueColor(0.5, 1));
+        gradient.addColorStop(1, hueColor(0.99, 1));
         ctx.fillStyle = gradient;
         ctx.fillRect(centerX - radius, centerY - radius, radius * 2, radius * 2);
         ctx.fillStyle = "rgba(255,255,255,0.9)";
@@ -664,74 +1051,702 @@ function drawCover(centerX, centerY, radius) {
     ctx.restore();
 
     ctx.lineWidth = Math.max(3, radius * 0.04);
-    ctx.strokeStyle = blendColor(0.7, state.primaryColor);
+    ctx.strokeStyle = hueColor(0.14, 0.84);
     ctx.beginPath();
     ctx.arc(centerX, centerY, radius + 2, 0, Math.PI * 2);
     ctx.stroke();
 }
 
+function vizClock() {
+    return Number(elements.audio.currentTime) || 0;
+}
+
+function sampleBands(spectrum, count) {
+    const n = spectrum.length;
+    const bands = new Array(count);
+    const minBin = 1;
+    const maxBin = Math.max(2, n - 1);
+    for (let index = 0; index < count; index += 1) {
+        const lo = minBin * ((maxBin / minBin) ** (index / count));
+        const hi = minBin * ((maxBin / minBin) ** ((index + 1) / count));
+        const start = Math.max(minBin, Math.floor(lo));
+        const end = Math.min(n, Math.max(start + 1, Math.ceil(hi)));
+        let sum = 0;
+        for (let bin = start; bin < end; bin += 1) {
+            sum += spectrum[bin] * spectrum[bin];
+        }
+        bands[index] = Math.sqrt(sum / (end - start)) / 255;
+    }
+    return bands;
+}
+
+function sampleWave(waveform, count) {
+    const out = new Array(count);
+    const bucket = waveform.length / count;
+    for (let index = 0; index < count; index += 1) {
+        const start = Math.floor(index * bucket);
+        const end = Math.max(start + 1, Math.floor((index + 1) * bucket));
+        let sum = 0;
+        for (let bin = start; bin < end; bin += 1) {
+            sum += waveform[bin];
+        }
+        out[index] = (sum / (end - start) - 128) / 128;
+    }
+    return out;
+}
+
+function fillRoundBar(x, y, width, height, radius, floorFlush = true) {
+    if (width <= 0 || height <= 0) {
+        return;
+    }
+    const corner = Math.min(radius, width / 2, height / 2);
+    ctx.beginPath();
+    if (typeof ctx.roundRect === "function") {
+        ctx.roundRect(x, y, width, height, floorFlush ? [corner, corner, 0, 0] : corner);
+    } else {
+        ctx.rect(x, y, width, height);
+    }
+    ctx.fill();
+}
+
 function drawOrbitPreset(centerX, centerY, radius, spectrum) {
-    const bars = 96;
-    const baseRadius = radius + 18;
-    for (let index = 0; index < bars; index += 1) {
-        const value = spectrum[index % spectrum.length] / 255;
-        const angle = (index / bars) * Math.PI * 2;
-        const barLength = 20 + value * 100;
-        const innerX = centerX + Math.cos(angle) * baseRadius;
-        const innerY = centerY + Math.sin(angle) * baseRadius;
-        const outerX = centerX + Math.cos(angle) * (baseRadius + barLength);
-        const outerY = centerY + Math.sin(angle) * (baseRadius + barLength);
-        ctx.strokeStyle = index % 2 === 0 ? blendColor(0.95, state.primaryColor) : blendColor(0.95, state.secondaryColor);
-        ctx.lineWidth = 3;
+    const bands = sampleBands(spectrum, 80);
+    const span = Math.min(elements.canvas.width, elements.canvas.height);
+    const clock = vizClock();
+    const beat = averageLevel(spectrum) / 255;
+    const baseRadius = state.centerImage ? radius + 16 : span * 0.07;
+    const maxBar = state.centerImage ? 142 : span * 0.42;
+    const spin = clock * 0.22;
+    const stroke = Math.max(2.4, state.centerImage
+        ? (Math.PI * 2 * baseRadius) / bands.length * 0.58
+        : span * 0.0042);
+
+    ctx.save();
+    ctx.globalCompositeOperation = "lighter";
+    const haze = ctx.createRadialGradient(centerX, centerY, baseRadius * 0.7, centerX, centerY, baseRadius + maxBar * 0.75);
+    haze.addColorStop(0, hueColor(0.08, 0.12 + beat * 0.08));
+    haze.addColorStop(0.5, hueColor(0.72, 0.035 + beat * 0.035));
+    haze.addColorStop(1, "rgba(0, 0, 0, 0)");
+    ctx.fillStyle = haze;
+    ctx.fillRect(centerX - span * 0.55, centerY - span * 0.55, span * 1.1, span * 1.1);
+
+    ctx.lineWidth = Math.max(1.2, span * 0.0016);
+    ctx.setLineDash([span * 0.008, span * 0.012]);
+    ctx.strokeStyle = hueColor(0.78, 0.28 + beat * 0.2);
+    ctx.beginPath();
+    ctx.arc(centerX, centerY, baseRadius + maxBar * (0.52 + beat * 0.08), spin * 0.4, spin * 0.4 + Math.PI * 2);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    ctx.lineCap = "round";
+    ctx.lineWidth = stroke;
+    ctx.shadowBlur = Math.max(8, span * 0.012);
+    for (let index = 0; index < bands.length; index += 1) {
+        const angle = (index / bands.length) * Math.PI * 2 + spin;
+        const harmonic = 0.82 + Math.sin(index * 0.43 + clock * 0.9) * 0.12;
+        const barLength = 12 + bands[index] * maxBar * harmonic + beat * span * 0.018;
+        ctx.strokeStyle = hueColor(index / bands.length, 0.95);
+        ctx.shadowColor = ctx.strokeStyle;
         ctx.beginPath();
-        ctx.moveTo(innerX, innerY);
-        ctx.lineTo(outerX, outerY);
+        ctx.moveTo(centerX + Math.cos(angle) * baseRadius, centerY + Math.sin(angle) * baseRadius);
+        ctx.lineTo(
+            centerX + Math.cos(angle) * (baseRadius + barLength),
+            centerY + Math.sin(angle) * (baseRadius + barLength),
+        );
         ctx.stroke();
     }
+
+    const waveform = sampleBands(spectrum, 160);
+    ctx.shadowBlur = Math.max(5, span * 0.007);
+    ctx.lineWidth = Math.max(1.6, span * 0.0022);
+    ctx.strokeStyle = hueColor(0.18, 0.72);
+    ctx.beginPath();
+    for (let index = 0; index <= waveform.length; index += 1) {
+        const t = index / waveform.length;
+        const angle = t * Math.PI * 2 - Math.PI / 2 + spin * 0.58;
+        const waveRadius = baseRadius + maxBar * (0.32 + waveform[index % waveform.length] * 0.2 + beat * 0.03);
+        const x = centerX + Math.cos(angle) * waveRadius;
+        const y = centerY + Math.sin(angle) * waveRadius;
+        if (index === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    }
+    ctx.closePath();
+    ctx.stroke();
+
+    ctx.shadowBlur = Math.max(6, span * 0.009);
+    for (let node = 0; node < 12; node += 1) {
+        const angle = clock * (node % 2 ? -0.14 : 0.1) + node * Math.PI * 2 / 12;
+        const nodeRadius = baseRadius + maxBar * (0.48 + Math.sin(clock * 0.8 + node) * 0.035);
+        const size = 2.4 + beat * 3.2 + (node % 3 === 0 ? 2 : 0);
+        ctx.fillStyle = hueColor(node / 12, 1);
+        ctx.shadowColor = ctx.fillStyle;
+        ctx.beginPath();
+        ctx.arc(centerX + Math.cos(angle) * nodeRadius, centerY + Math.sin(angle) * nodeRadius, size, 0, Math.PI * 2);
+        ctx.fill();
+    }
+    ctx.restore();
 }
 
 function drawBarsPreset(width, height, spectrum) {
     const portrait = state.aspectMode === "portrait";
-    const barWidth = width / 72;
-    // Sit on the canvas floor. Portrait lyrics occupy ~48–96% of the frame, so
-    // keep the bars in the bottom band instead of growing through the karaoke.
-    const maxRise = height * (portrait ? 0.18 : 0.32);
-    spectrum.slice(0, 72).forEach((value, index) => {
-        const normalized = value / 255;
-        const barHeight = 18 + normalized * maxRise;
-        const x = index * barWidth;
-        const y = height - barHeight;
-        ctx.fillStyle = index % 2 === 0 ? blendColor(0.95, state.primaryColor) : blendColor(0.95, state.secondaryColor);
-        ctx.fillRect(x + 3, y, Math.max(4, barWidth - 6), barHeight);
-    });
+    const count = 48;
+    const bands = sampleBands(spectrum, count);
+    const barWidth = width / count;
+    const floor = height * (portrait ? 0.9 : 0.86);
+    const maxRise = height * (portrait ? 0.16 : 0.28);
+    const gap = Math.max(3, barWidth * 0.3);
+    ctx.save();
+    ctx.globalCompositeOperation = "lighter";
+    const floorGlow = ctx.createLinearGradient(0, floor - maxRise * 0.2, 0, floor + height * 0.08);
+    floorGlow.addColorStop(0, hueColor(0.12, 0.02));
+    floorGlow.addColorStop(0.5, hueColor(0.72, 0.12));
+    floorGlow.addColorStop(1, "rgba(0, 0, 0, 0)");
+    ctx.fillStyle = floorGlow;
+    ctx.fillRect(0, floor - maxRise * 0.2, width, height * 0.12);
+    for (let index = 0; index < count; index += 1) {
+        const barHeight = 14 + bands[index] * maxRise;
+        const x = index * barWidth + gap / 2;
+        const w = Math.max(4, barWidth - gap);
+        const y = floor - barHeight;
+        const color = hueColor(index / Math.max(1, count - 1), 1);
+        ctx.fillStyle = blendColor(0.22, color);
+        fillRoundBar(x - 2, y - 6, w + 4, barHeight + 8, 8);
+        const gradient = ctx.createLinearGradient(0, y, 0, floor);
+        gradient.addColorStop(0, blendColor(1, color));
+        gradient.addColorStop(1, blendColor(0.45, color));
+        ctx.fillStyle = gradient;
+        fillRoundBar(x, y, w, barHeight, 6);
+        ctx.fillStyle = blendColor(0.95, color);
+        fillRoundBar(x, y - 3, w, Math.min(5, Math.max(2, w * 0.26)), 3, false);
+        ctx.globalAlpha = 0.28;
+        fillRoundBar(x, floor + 3, w, Math.max(6, barHeight * 0.38), 5, false);
+        ctx.globalAlpha = 1;
+    }
+    ctx.restore();
 }
 
 function drawPulsePreset(centerX, centerY, radius, energy) {
-    for (let ring = 0; ring < 4; ring += 1) {
-        const scale = 1 + ring * 0.22 + energy / 900 + Math.sin((performance.now() / 220) + ring) * 0.02;
+    const clock = vizClock();
+    const beat = energy / 255;
+    const span = Math.min(elements.canvas.width, elements.canvas.height);
+    const grow = state.centerImage ? radius * 1.85 : span * 0.48;
+    for (let ring = 0; ring < 5; ring += 1) {
+        const t = (clock * 0.55 + ring * 0.18) % 1;
+        const fade = 1 - t;
         ctx.beginPath();
-        ctx.lineWidth = 10 - ring * 2;
-        ctx.strokeStyle = ring % 2 === 0 ? blendColor(0.45 - ring * 0.08, state.primaryColor) : blendColor(0.42 - ring * 0.08, state.secondaryColor);
-        ctx.arc(centerX, centerY, radius * scale, 0, Math.PI * 2);
+        ctx.lineWidth = Math.max(1.4, (14 - t * 11) * (0.55 + beat));
+        ctx.strokeStyle = hueColor(ring / 5 + vizClock() * 0.04, fade * (ring % 2 === 0 ? 0.55 : 0.5));
+        ctx.arc(centerX, centerY, (state.centerImage ? radius : 4) + t * grow + beat * span * 0.04, 0, Math.PI * 2);
         ctx.stroke();
     }
 }
 
 function drawWavePreset(width, height, waveform) {
+    const samples = sampleWave(waveform, 144);
+    const portrait = state.aspectMode === "portrait";
+    const base = height * (portrait ? 0.84 : 0.8);
+    const amp = height * (portrait ? 0.1 : 0.14);
+    ctx.save();
+    ctx.globalCompositeOperation = "lighter";
+    const area = ctx.createLinearGradient(0, base - amp, 0, height);
+    area.addColorStop(0, hueColor(0.12, 0.38));
+    area.addColorStop(0.55, hueColor(0.72, 0.14));
+    area.addColorStop(1, "rgba(0, 0, 0, 0)");
     ctx.beginPath();
-    ctx.lineWidth = 5;
-    ctx.strokeStyle = blendColor(0.9, state.primaryColor);
-    const mid = height * 0.58;
-    waveform.forEach((value, index) => {
-        const x = (index / (waveform.length - 1)) * width;
-        const y = mid + ((value - 128) / 128) * (height * 0.18);
+    ctx.moveTo(0, height);
+    ctx.lineTo(0, base);
+    for (let index = 0; index < samples.length; index += 1) {
+        const x = (index / (samples.length - 1)) * width;
+        const y = base + samples[index] * amp;
+        ctx.lineTo(x, y);
+    }
+    ctx.lineTo(width, height);
+    ctx.closePath();
+    ctx.fillStyle = area;
+    ctx.fill();
+
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    for (let trail = 3; trail >= 0; trail -= 1) {
+        ctx.beginPath();
+        for (let index = 0; index < samples.length; index += 1) {
+            const x = (index / (samples.length - 1)) * width;
+            const y = base + samples[index] * amp * (1 - trail * 0.08) + trail * amp * 0.035;
+            if (index === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+        }
+        ctx.strokeStyle = trail === 0
+            ? hueColor(0.16, 0.96)
+            : hueColor(0.18 + trail * 0.2, 0.12 + (3 - trail) * 0.06);
+        ctx.lineWidth = trail === 0 ? 3.5 : 2 + trail * 2.2;
+        ctx.shadowBlur = trail === 0 ? 16 : 5;
+        ctx.shadowColor = hueColor(0.18 + trail * 0.2, 1);
+        ctx.stroke();
+    }
+    ctx.restore();
+}
+
+function drawHaloPreset(centerX, centerY, radius, spectrum) {
+    const bands = sampleBands(spectrum, 64);
+    const span = Math.min(elements.canvas.width, elements.canvas.height);
+    const inner = state.centerImage ? radius + 10 : 0;
+    const reach = state.centerImage ? 108 : span * 0.4;
+    ctx.beginPath();
+    for (let index = 0; index <= bands.length; index += 1) {
+        const band = bands[index % bands.length];
+        const angle = (index / bands.length) * Math.PI * 2 - Math.PI / 2;
+        const outer = inner + 20 + band * reach;
+        const x = centerX + Math.cos(angle) * outer;
+        const y = centerY + Math.sin(angle) * outer;
         if (index === 0) {
             ctx.moveTo(x, y);
         } else {
             ctx.lineTo(x, y);
         }
-    });
+    }
+    for (let index = bands.length; index >= 0; index -= 1) {
+        const angle = (index / bands.length) * Math.PI * 2 - Math.PI / 2;
+        ctx.lineTo(centerX + Math.cos(angle) * inner, centerY + Math.sin(angle) * inner);
+    }
+    ctx.closePath();
+    const glow = ctx.createRadialGradient(centerX, centerY, inner, centerX, centerY, inner + (state.centerImage ? 120 : span * 0.42));
+    glow.addColorStop(0, hueColor(0.08, 0.22));
+    glow.addColorStop(0.5, hueColor(0.5, 0.18));
+    glow.addColorStop(1, hueColor(0.92, 0.58));
+    ctx.fillStyle = glow;
+    ctx.fill();
+}
+
+function drawAuroraPreset(width, height, spectrum) {
+    const bands = sampleBands(spectrum, 28);
+    const clock = vizClock();
+    const portrait = state.aspectMode === "portrait";
+    const layers = 4;
+    for (let layer = 0; layer < layers; layer += 1) {
+        const baseY = height * ((portrait ? 0.58 : 0.62) + layer * 0.055);
+        const amp = height * (0.045 + layer * 0.018);
+        ctx.beginPath();
+        ctx.moveTo(0, height);
+        for (let x = 0; x <= width; x += 10) {
+            const t = x / width;
+            const band = bands[Math.min(bands.length - 1, Math.floor(t * bands.length))];
+            const y = baseY
+                - band * amp * 2.4
+                - Math.sin(t * Math.PI * (2.4 + layer) + clock * (0.55 + layer * 0.22) + layer) * amp;
+            ctx.lineTo(x, y);
+        }
+        ctx.lineTo(width, height);
+        ctx.closePath();
+        ctx.fillStyle = hueColor(layer / layers + clock * 0.025, layer % 2 === 0 ? 0.2 : 0.18);
+        ctx.fill();
+    }
+}
+
+function drawSunburstPreset(centerX, centerY, radius, spectrum) {
+    const bands = sampleBands(spectrum, 48);
+    const inner = state.centerImage ? radius + 6 : 0;
+    const reach = state.centerImage
+        ? Math.min(centerX, centerY) * 0.92
+        : Math.hypot(centerX, centerY) * 0.92;
+    for (let index = 0; index < bands.length; index += 1) {
+        const value = bands[index];
+        const a0 = (index / bands.length) * Math.PI * 2 - Math.PI / 2;
+        const a1 = ((index + 1) / bands.length) * Math.PI * 2 - Math.PI / 2;
+        const outer = inner + 36 + value * reach;
+        ctx.beginPath();
+        ctx.moveTo(centerX + Math.cos(a0) * inner, centerY + Math.sin(a0) * inner);
+        ctx.lineTo(centerX + Math.cos(a0) * outer, centerY + Math.sin(a0) * outer);
+        ctx.lineTo(centerX + Math.cos(a1) * outer, centerY + Math.sin(a1) * outer);
+        ctx.lineTo(centerX + Math.cos(a1) * inner, centerY + Math.sin(a1) * inner);
+        ctx.closePath();
+        ctx.fillStyle = hueColor(index / bands.length, 0.16 + value * 0.5);
+        ctx.fill();
+    }
+}
+
+function drawGridPreset(width, height, spectrum) {
+    const portrait = state.aspectMode === "portrait";
+    const cols = 24;
+    const rows = portrait ? 9 : 8;
+    const gap = 5;
+    const bandH = height * (portrait ? 0.2 : 0.28);
+    const originY = height - bandH - 12;
+    const cellW = (width - gap * (cols + 1)) / cols;
+    const cellH = (bandH - gap * (rows + 1)) / rows;
+    const bands = sampleBands(spectrum, cols);
+    for (let col = 0; col < cols; col += 1) {
+        const litRows = Math.round(bands[col] * rows);
+        for (let row = 0; row < rows; row += 1) {
+            const lit = (rows - 1 - row) < litRows;
+            const x = gap + col * (cellW + gap);
+            const y = originY + row * (cellH + gap);
+            ctx.fillStyle = lit
+                ? hueColor(col / Math.max(1, cols - 1), 0.82)
+                : "rgba(255,255,255,0.05)";
+            fillRoundBar(x, y, cellW, cellH, 3, false);
+        }
+    }
+}
+
+function drawTunnelPreset(centerX, centerY, radius, energy, spectrum) {
+    const beat = energy / 255;
+    const clock = vizClock();
+    const bands = sampleBands(spectrum, 10);
+    const unit = state.centerImage ? radius : Math.min(elements.canvas.width, elements.canvas.height) * 0.22;
+    ctx.save();
+    ctx.globalCompositeOperation = "lighter";
+    ctx.translate(centerX, centerY);
+    ctx.rotate(clock * 0.12);
+    for (let ring = 0; ring < 10; ring += 1) {
+        const t = (clock * 0.32 + ring * 0.1) % 1;
+        const size = unit * (0.3 + t * 2.55 + beat * 0.14);
+        const depth = 1 - t;
+        const skew = Math.sin(clock * 0.7 + ring * 0.55) * size * 0.08;
+        ctx.beginPath();
+        ctx.lineWidth = 1.8 + bands[ring] * 9 + depth * 2;
+        ctx.strokeStyle = hueColor(ring / 10 + clock * 0.02, Math.max(0.1, 0.34 - t * 0.2));
+        ctx.shadowBlur = 8 + depth * 18;
+        ctx.shadowColor = ctx.strokeStyle;
+        if (typeof ctx.roundRect === "function") {
+            ctx.roundRect(-size + skew, -size * 0.56, size * 2, size * 1.12, Math.max(12, size * 0.08));
+        } else {
+            ctx.rect(-size + skew, -size * 0.56, size * 2, size * 1.12);
+        }
+        ctx.stroke();
+    }
+
+    ctx.shadowBlur = 0;
+    ctx.lineWidth = Math.max(1.2, unit * 0.018);
+    ctx.strokeStyle = hueColor(0.18, 0.5 + beat * 0.25);
+    ctx.beginPath();
+    ctx.moveTo(-unit * 1.9, 0);
+    ctx.lineTo(unit * 1.9, 0);
+    ctx.moveTo(0, -unit * 1.05);
+    ctx.lineTo(0, unit * 1.05);
     ctx.stroke();
+    ctx.restore();
+}
+
+function drawSplitPreset(width, height, spectrum) {
+    const bands = sampleBands(spectrum, 28);
+    const midY = height * (state.aspectMode === "portrait" ? 0.4 : 0.46);
+    const gap = width * (state.aspectMode === "portrait" ? 0.5 : 0.4);
+    const side = (width - gap) / 2 - 20;
+    const maxH = height * (state.aspectMode === "portrait" ? 0.16 : 0.2);
+    const barW = side / bands.length;
+    const drawWing = (originX, direction) => {
+        for (let index = 0; index < bands.length; index += 1) {
+            const h = 8 + bands[index] * maxH;
+            const x = direction < 0
+                ? originX + side - (index + 1) * barW
+                : originX + index * barW;
+            const w = Math.max(3, barW * 0.62);
+            const color = hueColor(index / Math.max(1, bands.length - 1), 1);
+            ctx.fillStyle = color;
+            fillRoundBar(x, midY - h, w, h, 4);
+            ctx.globalAlpha = 0.55;
+            fillRoundBar(x, midY + 4, w, h, 4, false);
+            ctx.globalAlpha = 1;
+        }
+    };
+    drawWing(16, 1);
+    drawWing(width - 16 - side, -1);
+}
+
+function drawSkylinePreset(width, height, spectrum) {
+    const bands = sampleBands(spectrum, 40);
+    const portrait = state.aspectMode === "portrait";
+    const horizon = height * (portrait ? 0.42 : 0.48);
+    const maxH = height * (portrait ? 0.22 : 0.28);
+    const barW = width / bands.length;
+    const gap = Math.max(2, barW * 0.22);
+    for (let index = 0; index < bands.length; index += 1) {
+        const t = index / Math.max(1, bands.length - 1);
+        const h = 10 + bands[index] * maxH;
+        const x = index * barW + gap / 2;
+        const w = Math.max(4, barW - gap);
+        const color = hueColor(t, 1);
+        const y = horizon - h;
+        const glow = ctx.createLinearGradient(0, y, 0, horizon);
+        glow.addColorStop(0, blendColor(1, color));
+        glow.addColorStop(1, blendColor(0.4, color));
+        ctx.fillStyle = blendColor(0.18, color);
+        fillRoundBar(x - 1, y - 5, w + 2, h + 6, 7);
+        ctx.fillStyle = glow;
+        fillRoundBar(x, y, w, h, 5);
+        ctx.globalAlpha = 0.32 * (0.35 + bands[index]);
+        fillRoundBar(x, horizon + 4, w, h * 0.55, 5, false);
+        ctx.globalAlpha = 1;
+    }
+}
+
+function drawFlowPreset(width, height, spectrum) {
+    const bands = sampleBands(spectrum, 20);
+    const clock = vizClock();
+    const portrait = state.aspectMode === "portrait";
+    const mid = height * (portrait ? 0.42 : 0.46);
+    ctx.save();
+    ctx.globalCompositeOperation = "lighter";
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    for (let layer = 0; layer < 6; layer += 1) {
+        ctx.beginPath();
+        const amp = height * (0.045 + layer * 0.012);
+        ctx.lineWidth = 2.2 + layer * 0.35;
+        ctx.strokeStyle = hueColor(layer / 6 + clock * 0.03, layer % 2 === 0 ? 0.28 : 0.24);
+        for (let x = 0; x <= width; x += 8) {
+            const t = x / width;
+            const band = bands[Math.min(bands.length - 1, Math.floor(t * bands.length))];
+            const y = mid
+                + Math.sin(t * Math.PI * (2.2 + layer * 0.35) + clock * (0.7 + layer * 0.12) + layer)
+                    * (amp + band * amp * 2.2);
+            if (x === 0) {
+                ctx.moveTo(x, y);
+            } else {
+                ctx.lineTo(x, y);
+            }
+        }
+        ctx.stroke();
+    }
+    ctx.restore();
+}
+
+function lyricsAreCentered() {
+    return state.preset === "split" || state.preset === "skyline" || state.preset === "peak";
+}
+
+function drawScopePreset(width, height, waveform) {
+    const samples = sampleWave(waveform, 220);
+    const portrait = state.aspectMode === "portrait";
+    const mid = height * (portrait ? 0.38 : 0.4);
+    const amp = height * (portrait ? 0.12 : 0.16);
+    ctx.beginPath();
+    ctx.moveTo(0, mid);
+    for (let index = 0; index < samples.length; index += 1) {
+        const x = (index / (samples.length - 1)) * width;
+        ctx.lineTo(x, mid - Math.abs(samples[index]) * amp);
+    }
+    for (let index = samples.length - 1; index >= 0; index -= 1) {
+        const x = (index / (samples.length - 1)) * width;
+        ctx.lineTo(x, mid + Math.abs(samples[index]) * amp);
+    }
+    ctx.closePath();
+    ctx.fillStyle = hueColor(0.72, 0.82);
+    ctx.fill();
+    ctx.strokeStyle = blendColor(0.95, "#f4f7fb");
+    ctx.lineWidth = 2;
+    ctx.stroke();
+}
+
+function drawRingsPreset(centerX, centerY, radius, spectrum) {
+    const bands = sampleBands(spectrum, 48);
+    const clock = vizClock();
+    const span = Math.min(elements.canvas.width, elements.canvas.height);
+    const inner = state.centerImage ? radius + 12 : 10;
+    ctx.save();
+    ctx.lineJoin = "round";
+    ctx.lineCap = "round";
+    ctx.globalCompositeOperation = "lighter";
+    for (let ring = 0; ring < 12; ring += 1) {
+        const base = inner + ring * span * 0.032;
+        ctx.beginPath();
+        ctx.lineWidth = 1.6 + (11 - ring) * 0.12;
+        ctx.strokeStyle = hueColor(ring / 12, 0.55);
+        for (let index = 0; index <= bands.length; index += 1) {
+            const band = bands[index % bands.length];
+            const angle = (index / bands.length) * Math.PI * 2 + clock * (0.05 + ring * 0.01) * (ring % 2 ? -1 : 1);
+            const r = base + band * span * 0.045;
+            const x = centerX + Math.cos(angle) * r;
+            const y = centerY + Math.sin(angle) * r;
+            if (index === 0) {
+                ctx.moveTo(x, y);
+            } else {
+                ctx.lineTo(x, y);
+            }
+        }
+        ctx.closePath();
+        ctx.stroke();
+    }
+    ctx.restore();
+}
+
+function drawMeshPreset(width, height, spectrum) {
+    const bands = sampleBands(spectrum, 28);
+    const clock = vizClock();
+    const portrait = state.aspectMode === "portrait";
+    const rows = portrait ? 16 : 18;
+    ctx.save();
+    ctx.globalCompositeOperation = "lighter";
+    ctx.lineCap = "round";
+    ctx.lineWidth = 1.7;
+    for (let row = 0; row < rows; row += 1) {
+        const y0 = height * (0.18 + (row / (rows - 1)) * (portrait ? 0.42 : 0.52));
+        ctx.beginPath();
+        ctx.strokeStyle = hueColor(row / rows, 0.38);
+        for (let x = 0; x <= width; x += 7) {
+            const t = x / width;
+            const band = bands[Math.min(bands.length - 1, Math.floor(t * bands.length))];
+            const y = y0
+                + Math.sin(t * Math.PI * 7.5 + clock * 0.85 + row * 0.32) * (10 + band * 42)
+                + Math.sin(t * Math.PI * 2.4 + row) * 7;
+            if (x === 0) {
+                ctx.moveTo(x, y);
+            } else {
+                ctx.lineTo(x, y);
+            }
+        }
+        ctx.stroke();
+    }
+    ctx.restore();
+}
+
+function drawDiscPreset(centerX, centerY, radius, spectrum) {
+    const bands = sampleBands(spectrum, 72);
+    const span = Math.min(elements.canvas.width, elements.canvas.height);
+    const inner = state.centerImage ? radius + 8 : span * 0.07;
+    const reach = state.centerImage ? span * 0.22 : span * 0.38;
+    for (let index = 0; index < bands.length; index += 1) {
+        const a0 = (index / bands.length) * Math.PI * 2 - Math.PI / 2;
+        const a1 = ((index + 1) / bands.length) * Math.PI * 2 - Math.PI / 2;
+        const outer = inner + 12 + bands[index] * reach;
+        ctx.beginPath();
+        ctx.moveTo(centerX + Math.cos(a0) * inner, centerY + Math.sin(a0) * inner);
+        ctx.lineTo(centerX + Math.cos(a0) * outer, centerY + Math.sin(a0) * outer);
+        ctx.lineTo(centerX + Math.cos(a1) * outer, centerY + Math.sin(a1) * outer);
+        ctx.lineTo(centerX + Math.cos(a1) * inner, centerY + Math.sin(a1) * inner);
+        ctx.closePath();
+        ctx.fillStyle = fullSpectrumColor(index / bands.length, 0.72 + bands[index] * 0.22);
+        ctx.fill();
+    }
+}
+
+function drawPeakPreset(width, height, spectrum) {
+    const bands = sampleBands(spectrum, 56);
+    const portrait = state.aspectMode === "portrait";
+    const horizon = height * (portrait ? 0.44 : 0.5);
+    const maxH = height * (portrait ? 0.24 : 0.3);
+    const rainbow = ctx.createLinearGradient(0, 0, width, 0);
+    rainbow.addColorStop(0, fullSpectrumColor(0, 0.95));
+    rainbow.addColorStop(0.2, fullSpectrumColor(0.2, 0.95));
+    rainbow.addColorStop(0.4, fullSpectrumColor(0.4, 0.95));
+    rainbow.addColorStop(0.6, fullSpectrumColor(0.6, 0.95));
+    rainbow.addColorStop(0.8, fullSpectrumColor(0.8, 0.95));
+    rainbow.addColorStop(1, fullSpectrumColor(0.99, 0.95));
+
+    ctx.save();
+    ctx.globalCompositeOperation = "source-over";
+    for (let layer = 2; layer >= 0; layer -= 1) {
+        const offset = layer * height * 0.025;
+        const scale = 1 - layer * 0.16;
+        ctx.beginPath();
+        ctx.moveTo(0, height);
+        ctx.lineTo(0, horizon + offset);
+        for (let index = 0; index < bands.length; index += 1) {
+            const x = (index / (bands.length - 1)) * width;
+            const wave = bands[index] * maxH * scale;
+            const y = horizon + offset - (8 + wave);
+            ctx.lineTo(x, y);
+        }
+        ctx.lineTo(width, horizon + offset);
+        ctx.lineTo(width, height);
+        ctx.closePath();
+        ctx.fillStyle = layer === 0 ? rainbow : blendColor(0.12 + (2 - layer) * 0.06, layer % 2 ? state.secondaryColor : state.primaryColor);
+        ctx.shadowBlur = layer === 0 ? 18 : 7;
+        ctx.shadowColor = layer % 2 ? state.secondaryColor : state.primaryColor;
+        ctx.fill();
+    }
+
+    ctx.shadowBlur = 10;
+    ctx.lineWidth = Math.max(1.8, height * 0.0024);
+    ctx.strokeStyle = blendColor(0.9, "#f7fbff");
+    ctx.beginPath();
+    for (let index = 0; index < bands.length; index += 1) {
+        const x = (index / (bands.length - 1)) * width;
+        const y = horizon - (8 + bands[index] * maxH);
+        if (index === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+
+    ctx.shadowBlur = 0;
+    ctx.save();
+    ctx.globalAlpha = 0.28;
+    ctx.beginPath();
+    ctx.moveTo(0, horizon);
+    for (let index = 0; index < bands.length; index += 1) {
+        const x = (index / (bands.length - 1)) * width;
+        const y = horizon + (8 + bands[index] * maxH * 0.55);
+        ctx.lineTo(x, y);
+    }
+    ctx.lineTo(width, horizon);
+    ctx.closePath();
+    ctx.fillStyle = rainbow;
+    ctx.fill();
+    ctx.restore();
+    ctx.restore();
+}
+
+function drawSpiralPreset(centerX, centerY, radius, spectrum) {
+    const bands = sampleBands(spectrum, 140);
+    const clock = vizClock();
+    const span = Math.min(elements.canvas.width, elements.canvas.height);
+    const inner = state.centerImage ? radius + 6 : 6;
+    ctx.save();
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    ctx.globalCompositeOperation = "lighter";
+    ctx.lineWidth = Math.max(2.2, span * 0.0038);
+    ctx.beginPath();
+    for (let index = 0; index < bands.length; index += 1) {
+        const t = index / bands.length;
+        const angle = t * Math.PI * 12 + clock * 0.28;
+        const r = inner + t * span * 0.4 + bands[index] * span * 0.09;
+        const x = centerX + Math.cos(angle) * r;
+        const y = centerY + Math.sin(angle) * r;
+        if (index === 0) {
+            ctx.moveTo(x, y);
+        } else {
+            ctx.lineTo(x, y);
+        }
+    }
+    ctx.strokeStyle = hueColor((clock * 0.08) % 1, 0.7);
+    ctx.stroke();
+    ctx.beginPath();
+    for (let index = 0; index < bands.length; index += 1) {
+        const t = index / bands.length;
+        const angle = t * Math.PI * 12 + Math.PI + clock * 0.28;
+        const r = inner + t * span * 0.36 + bands[index] * span * 0.07;
+        const x = centerX + Math.cos(angle) * r;
+        const y = centerY + Math.sin(angle) * r;
+        if (index === 0) {
+            ctx.moveTo(x, y);
+        } else {
+            ctx.lineTo(x, y);
+        }
+    }
+    ctx.strokeStyle = hueColor((clock * 0.08 + 0.45) % 1, 0.55);
+    ctx.stroke();
+    ctx.restore();
+}
+
+function drawArcPreset(centerX, centerY, radius, spectrum) {
+    const bands = sampleBands(spectrum, 40);
+    const canvasSpan = Math.min(elements.canvas.width, elements.canvas.height);
+    const inner = state.centerImage ? radius + 16 : 0;
+    const start = Math.PI * 0.12;
+    const end = Math.PI * 0.88;
+    const span = end - start;
+    const rise = state.centerImage ? 150 : canvasSpan * 0.42;
+    for (let index = 0; index < bands.length; index += 1) {
+        const a0 = start + (index / bands.length) * span;
+        const a1 = start + ((index + 1) / bands.length) * span;
+        const outer = inner + 18 + bands[index] * rise;
+        ctx.beginPath();
+        ctx.moveTo(centerX + Math.cos(a0) * inner, centerY + Math.sin(a0) * inner);
+        ctx.lineTo(centerX + Math.cos(a0) * outer, centerY + Math.sin(a0) * outer);
+        ctx.lineTo(centerX + Math.cos(a1) * outer, centerY + Math.sin(a1) * outer);
+        ctx.lineTo(centerX + Math.cos(a1) * inner, centerY + Math.sin(a1) * inner);
+        ctx.closePath();
+        ctx.fillStyle = hueColor(index / bands.length, 0.9);
+        ctx.fill();
+    }
 }
 
 function wrapTextLines(text, maxWidth, maxLines) {
@@ -981,6 +1996,23 @@ function lyricWordColor(word, currentTime) {
     return "rgba(255,255,255,0.42)";
 }
 
+function translationFontSize(fontSize) {
+    return Math.max(15, Math.round(fontSize * 0.56));
+}
+
+function lyricBlockHeight(line, maxWidth, fontSize) {
+    ctx.font = `800 ${fontSize}px "Plus Jakarta Sans"`;
+    const sungRows = Math.max(1, layoutLyricRows(lyricWordItems(line), maxWidth, lyricWordGap(fontSize)).length);
+    let height = sungRows * fontSize * 1.32;
+    if (state.dualLyrics && line.translation) {
+        const transSize = translationFontSize(fontSize);
+        ctx.font = `600 ${transSize}px "Plus Jakarta Sans"`;
+        const rows = wrapTextLines(line.translation, maxWidth, 2);
+        height += transSize * 0.45 + rows.length * transSize * 1.28;
+    }
+    return height;
+}
+
 function drawKaraokeLine(line, currentTime, centerX, y, maxWidth, fontSize, inactive = false) {
     const words = lyricWordItems(line);
     const wordGap = lyricWordGap(fontSize);
@@ -1000,7 +2032,21 @@ function drawKaraokeLine(line, currentTime, centerX, y, maxWidth, fontSize, inac
             cursorX += word.width + (wordIndex < row.items.length - 1 ? wordGap : 0);
         });
     });
-    return rows.length * lineHeight;
+    let height = Math.max(1, rows.length) * lineHeight;
+    if (state.dualLyrics && line.translation) {
+        const transSize = translationFontSize(fontSize);
+        ctx.font = `600 ${transSize}px "Plus Jakarta Sans"`;
+        ctx.textAlign = "center";
+        const translated = wrapTextLines(line.translation, maxWidth, 2);
+        const startY = y + height + transSize * 0.2;
+        translated.forEach((row, rowIndex) => {
+            ctx.fillStyle = inactive ? "rgba(185,174,210,0.42)" : "rgba(185,174,210,0.92)";
+            ctx.fillText(row, centerX, startY + rowIndex * transSize * 1.28);
+        });
+        height += transSize * 0.45 + translated.length * transSize * 1.28;
+        ctx.textAlign = "left";
+    }
+    return height;
 }
 
 function easeSmooth(progress) {
@@ -1056,19 +2102,18 @@ function drawScrollingLyrics(width, height, currentTime) {
         ? state.lyricLines.findIndex((line) => line.index === current.index)
         : startedIndex;
     const focusIndex = lyricScrollFocusIndex(currentTime, startedIndex);
+    const centered = lyricsAreCentered();
     const fontSize = Math.max(portrait ? 25 : 23, Math.min(width, height) * (portrait ? 0.035 : 0.02));
-    const lyricsWidth = width * (portrait ? 0.86 : 0.74);
-    const scrollTop = height * (portrait ? 0.48 : 0.58);
-    const scrollBottom = height - (portrait ? 52 : 40);
-    const anchorY = height * (portrait ? 0.72 : 0.77);
+    const lyricsWidth = width * (centered ? (portrait ? 0.62 : 0.36) : (portrait ? 0.86 : 0.74));
+    const scrollTop = height * (centered ? (portrait ? 0.28 : 0.34) : (portrait ? 0.48 : 0.58));
+    const scrollBottom = height * (centered ? (portrait ? 0.58 : 0.62) : 1) - (portrait ? 52 : 40);
+    const anchorY = height * (centered ? (portrait ? 0.42 : 0.48) : (portrait ? 0.72 : 0.77));
     const firstIndex = Math.max(0, Math.floor(focusIndex) - 1);
     const lastIndex = Math.min(state.lyricLines.length - 1, Math.ceil(focusIndex) + 1);
-    const wordGap = lyricWordGap(fontSize);
     ctx.font = `800 ${fontSize}px "Plus Jakarta Sans"`;
     let tallestBlock = fontSize * 1.32;
     for (let index = firstIndex; index <= lastIndex; index += 1) {
-        const rows = layoutLyricRows(lyricWordItems(state.lyricLines[index]), lyricsWidth, wordGap);
-        tallestBlock = Math.max(tallestBlock, rows.length * fontSize * 1.32);
+        tallestBlock = Math.max(tallestBlock, lyricBlockHeight(state.lyricLines[index], lyricsWidth, fontSize));
     }
     // Keep prev/current/next from colliding when a line wraps to two rows.
     const lineStep = tallestBlock + Math.max(fontSize * 1.15, portrait ? 28 : 24);
@@ -1104,9 +2149,11 @@ function drawScrollingLyrics(width, height, currentTime) {
 
 function renderVisualizer() {
     renderFrame = window.requestAnimationFrame(renderVisualizer);
+    if (state.audioSrcBackup) {
+        return;
+    }
     const width = elements.canvas.width;
     const height = elements.canvas.height;
-    const portrait = state.aspectMode === "portrait";
 
     if (analyser) {
         analyser.getByteFrequencyData(frequencyData);
@@ -1120,10 +2167,10 @@ function renderVisualizer() {
     ctx.clearRect(0, 0, width, height);
     drawBackground(width, height, energy);
     drawParticles(width, height, energy);
+    drawCinematicAtmosphere(width, height, energy);
 
-    const centerX = width / 2;
-    const centerY = portrait ? height * 0.39 : (height / 2) - 40;
-    const radius = Math.min(width, height) * (portrait ? 0.19 : 0.14);
+    const cover = visualCenter(width, height);
+    const { x: centerX, y: centerY, radius } = vizFocus(width, height);
 
     if (state.preset === "orbit") {
         drawOrbitPreset(centerX, centerY, radius, frequencyData);
@@ -1131,13 +2178,42 @@ function renderVisualizer() {
         drawBarsPreset(width, height, frequencyData);
     } else if (state.preset === "pulse") {
         drawPulsePreset(centerX, centerY, radius, energy);
-        drawOrbitPreset(centerX, centerY, radius, frequencyData.slice(0, 48));
-    } else {
+    } else if (state.preset === "wave") {
         drawWavePreset(width, height, waveformData);
+    } else if (state.preset === "halo") {
+        drawHaloPreset(centerX, centerY, radius, frequencyData);
+    } else if (state.preset === "aurora") {
+        drawAuroraPreset(width, height, frequencyData);
+    } else if (state.preset === "sunburst") {
+        drawSunburstPreset(centerX, centerY, radius, frequencyData);
+    } else if (state.preset === "grid") {
+        drawGridPreset(width, height, frequencyData);
+    } else if (state.preset === "tunnel") {
+        drawTunnelPreset(centerX, centerY, radius, energy, frequencyData);
+    } else if (state.preset === "split") {
+        drawSplitPreset(width, height, frequencyData);
+    } else if (state.preset === "skyline") {
+        drawSkylinePreset(width, height, frequencyData);
+    } else if (state.preset === "flow") {
+        drawFlowPreset(width, height, frequencyData);
+    } else if (state.preset === "scope") {
+        drawScopePreset(width, height, waveformData);
+    } else if (state.preset === "rings") {
+        drawRingsPreset(centerX, centerY, radius, frequencyData);
+    } else if (state.preset === "mesh") {
+        drawMeshPreset(width, height, frequencyData);
+    } else if (state.preset === "disc") {
+        drawDiscPreset(centerX, centerY, radius, frequencyData);
+    } else if (state.preset === "peak") {
+        drawPeakPreset(width, height, frequencyData);
+    } else if (state.preset === "spiral") {
+        drawSpiralPreset(centerX, centerY, radius, frequencyData);
+    } else {
+        drawArcPreset(centerX, centerY, radius, frequencyData);
     }
 
     if (state.centerImage) {
-        drawCover(centerX, centerY, radius);
+        drawCover(cover.x, cover.y, cover.radius);
     }
     drawScrollingLyrics(width, height, elements.audio.currentTime || 0);
 }
@@ -1351,6 +2427,7 @@ async function loadTimedLyrics(urlOverride = state.currentLyricsUrl) {
             .filter((line) => line.text && Number.isFinite(line.start) && Number.isFinite(line.end) && line.end > line.start)
             .sort((a, b) => a.start - b.start);
         setLyricsEnabled(state.lyricLines.length > 0);
+        setDualLyrics(state.dualLyrics && hasLyricTranslations());
         if (state.lyricLines.length) {
             const zeroConfidenceLines = state.lyricLines.filter((line) => Number(line.matchScore || 0) <= 0).length;
             const hasPoorTiming = zeroConfidenceLines > Math.max(2, state.lyricLines.length * 0.2);
@@ -1359,7 +2436,7 @@ async function loadTimedLyrics(urlOverride = state.currentLyricsUrl) {
                 elements.lyricsStatus,
                 hasPoorTiming
                     ? `Loaded ${state.lyricLines.length} lyric lines, but ${zeroConfidenceLines} have unreliable timing. Re-sync Lyrics will use the GPU and replace this timing pass.`
-                    : `Loaded ${state.lyricLines.length} timed lyric lines${songId ? ` for ${songTitle}` : ""}. Lyrics scroll upward as the song plays, with the sung line highlighted.`,
+                    : `Loaded ${state.lyricLines.length} timed lyric lines${songId ? ` for ${songTitle}` : ""}. Lyrics scroll upward as the song plays, with the sung line highlighted.${hasLyricTranslations() ? " Dual language adds the English line under the sung line." : ""}`,
             );
         } else {
             setStatus(elements.lyricsStatus, "Timed lyric file loaded, but no usable subtitle lines were found.");
@@ -1394,9 +2471,8 @@ async function findSongSnapshot() {
 }
 
 async function refreshLyricsState() {
-    if (state.lyricsPollTimer) {
-        window.clearTimeout(state.lyricsPollTimer);
-        state.lyricsPollTimer = null;
+    if (!state.lyricsSyncBusy) {
+        clearLyricsPoll();
     }
     if (!songId) {
         setLyricsEnabled(false);
@@ -1409,6 +2485,9 @@ async function refreshLyricsState() {
     try {
         song = await findSongSnapshot();
     } catch (error) {
+        if (state.lyricsSyncBusy) {
+            return;
+        }
         setLyricsEnabled(false);
         setLyricsSyncButton(false, false);
         setStatus(elements.lyricsStatus, `Could not read the song state: ${error.message}`);
@@ -1418,7 +2497,12 @@ async function refreshLyricsState() {
     state.songHasAlignableLyrics = canAlignLyrics(song);
 
     const timedLyricsUrl = `/api/library/${encodeURIComponent(songId)}/timed-lyrics`;
-    if (song?.timed_lyrics?.lines?.length && await loadTimedLyrics(timedLyricsUrl)) return;
+    if (!state.lyricsSyncBusy && song?.timed_lyrics?.lines?.length && await loadTimedLyrics(timedLyricsUrl)) {
+        return;
+    }
+    if (state.lyricsSyncBusy) {
+        return;
+    }
 
     state.currentLyricsUrl = "";
     state.lyricLines = [];
@@ -1439,66 +2523,116 @@ async function refreshLyricsState() {
     setStatus(elements.lyricsStatus, "This song is instrumental or does not have saved vocal lyrics to align.");
 }
 
+function finishLyricsSyncBusy() {
+    state.lyricsSyncBusy = false;
+    state.lyricsSyncJobId = "";
+    state.lyricsPollFailures = 0;
+    clearLyricsPoll();
+    restoreAudioAfterSync();
+}
+
+async function applyLyricsJobSnapshot(job, blocker = null) {
+    if (!job || (job.kind && job.kind !== "lyrics_sync")) {
+        return;
+    }
+    if (job.id) {
+        state.lyricsSyncJobId = job.id;
+    }
+    if (job.status === "succeeded") {
+        notifyParent("codex-song-studio-refresh-library", { songId });
+        const timedLyricsUrl = `/api/library/${encodeURIComponent(songId)}/timed-lyrics`;
+        const loaded = await loadTimedLyrics(timedLyricsUrl);
+        finishLyricsSyncBusy();
+        if (!loaded) {
+            setLyricsSyncButton(true, false, "Re-sync Lyrics");
+            setStatus(elements.lyricsStatus, "Timed lyrics finished, but this page could not load them yet. Close and reopen Video Studio if they do not appear.");
+        }
+        return;
+    }
+    if (job.status === "failed" || job.status === "cancelled") {
+        finishLyricsSyncBusy();
+        setLyricsSyncButton(true, false, "Re-sync Lyrics");
+        setStatus(elements.lyricsStatus, job.error || "Lyrics sync failed.");
+        return;
+    }
+    state.lyricsSyncBusy = true;
+    if (job.status === "queued") {
+        restoreAudioAfterSync();
+        setLyricsSyncButton(true, true, "Queued...");
+        const ahead = blocker || await findBlockingJob(job.id);
+        setStatus(elements.lyricsStatus, queuedLyricsStatus(ahead));
+        return;
+    }
+    releaseAudioForSync();
+    setLyricsSyncButton(true, true, "Syncing...");
+    setStatus(elements.lyricsStatus, job.phase || "Aligning the written lyrics to the sung vocals.");
+}
+
 async function startLyricsSync() {
     if (!songId) {
         setStatus(elements.lyricsStatus, "Save the song first, then open Video Studio from that saved song.");
         return;
     }
     try {
-        setLyricsSyncButton(true, true, "Syncing...");
-        const response = await fetch(`/api/library/${encodeURIComponent(songId)}/lyrics-sync`, {
+        state.lyricsSyncBusy = true;
+        state.lyricsPollFailures = 0;
+        setLyricsSyncButton(true, true, "Starting...");
+        setStatus(elements.lyricsStatus, "Starting lyric synchronization...");
+        const { response, payload } = await fetchJson(`/api/library/${encodeURIComponent(songId)}/lyrics-sync`, {
             method: "POST",
-        });
-        const payload = await response.json();
+        }, 20000);
         if (!response.ok) {
-            throw new Error(payload.detail || "Lyrics sync failed to start.");
+            throw new Error(jobErrorDetail(payload, "Lyrics sync failed to start."));
         }
         const job = payload.job || {};
-        state.lyricsSyncJobId = job.id || "";
-        setStatus(elements.lyricsStatus, job.phase || "Aligning the written lyrics to the sung vocals.");
-        notifyParent("codex-song-studio-refresh-library", { songId });
-        if (state.lyricsPollTimer) {
-            window.clearTimeout(state.lyricsPollTimer);
+        if (!job.id) {
+            throw new Error("Lyrics sync started but the studio did not return a job id.");
         }
-        state.lyricsPollTimer = window.setTimeout(() => pollLyricsSyncJob(state.lyricsSyncJobId), 1200);
+        state.lyricsSyncJobId = job.id;
+        await applyLyricsJobSnapshot(job);
+        notifyParent("codex-song-studio-refresh-library", { songId });
+        scheduleLyricsPoll(job.id, 400);
     } catch (error) {
+        finishLyricsSyncBusy();
         setLyricsSyncButton(true, false, "Re-sync Lyrics");
         setStatus(elements.lyricsStatus, `Lyrics sync start failed: ${error.message}`);
     }
 }
 
 async function pollLyricsSyncJob(jobId) {
-    if (state.lyricsPollTimer) {
-        window.clearTimeout(state.lyricsPollTimer);
-        state.lyricsPollTimer = null;
-    }
+    clearLyricsPoll();
     if (!jobId) {
+        finishLyricsSyncBusy();
+        setLyricsSyncButton(true, false, "Re-sync Lyrics");
+        setStatus(elements.lyricsStatus, "Lyrics sync started but the studio lost the job id.");
         return;
     }
     try {
-        const response = await fetch(`/api/jobs/${encodeURIComponent(jobId)}`);
-        const payload = await response.json();
+        const { response, payload } = await fetchJson(`/api/jobs/${encodeURIComponent(jobId)}`);
         if (!response.ok) {
-            throw new Error(payload.detail || "Lyrics sync polling failed.");
+            throw new Error(jobErrorDetail(payload, "Lyrics sync polling failed."));
         }
-        const job = payload.job || {};
-        if (job.status === "succeeded") {
-            notifyParent("codex-song-studio-refresh-library", { songId });
-            state.currentLyricsUrl = `/api/library/${encodeURIComponent(songId)}/timed-lyrics`;
-            await refreshLyricsState();
-            return;
+        const job = payload.job || payload;
+        state.lyricsPollFailures = 0;
+        await applyLyricsJobSnapshot(job);
+        if (state.lyricsSyncBusy && job.status !== "succeeded" && job.status !== "failed" && job.status !== "cancelled") {
+            scheduleLyricsPoll(jobId, 1500);
         }
-        if (job.status === "failed") {
-            setLyricsSyncButton(true, false, "Re-sync Lyrics");
-            setStatus(elements.lyricsStatus, job.error || "Lyrics sync failed.");
-            return;
-        }
-        setLyricsSyncButton(true, true, "Syncing...");
-        setStatus(elements.lyricsStatus, job.phase || "Aligning the written lyrics to the sung vocals.");
-        state.lyricsPollTimer = window.setTimeout(() => pollLyricsSyncJob(jobId), 2500);
     } catch (error) {
-        setLyricsSyncButton(true, false, "Re-sync Lyrics");
-        setStatus(elements.lyricsStatus, `Lyrics sync polling failed: ${error.message}`);
+        state.lyricsPollFailures += 1;
+        if (!jobId) {
+            finishLyricsSyncBusy();
+            setLyricsSyncButton(true, false, "Re-sync Lyrics");
+            setStatus(elements.lyricsStatus, `Lyrics sync polling failed: ${error.message}`);
+            return;
+        }
+        setStatus(
+            elements.lyricsStatus,
+            state.lyricsPollFailures > 2
+                ? "Still waiting in the studio job queue. Retrying…"
+                : "Waiting for lyric synchronization...",
+        );
+        scheduleLyricsPoll(jobId, 2000);
     }
 }
 
@@ -1700,6 +2834,21 @@ elements.lyricsOff.addEventListener("click", () => {
     setLyricsEnabled(false);
     setStatus(elements.lyricsStatus, state.lyricLines.length ? "Lyric overlay is off." : "No timed lyrics are loaded.");
 });
+if (elements.dualOn && elements.dualOff) {
+    elements.dualOn.addEventListener("click", () => {
+        if (!hasLyricTranslations()) {
+            setDualLyrics(false);
+            setStatus(elements.lyricsStatus, "No English translation is saved for this song yet. Use Translate to English in Edit details first.");
+            return;
+        }
+        setDualLyrics(true);
+        setStatus(elements.lyricsStatus, "Dual language is on. The English line sits under the sung line in preview and MP4.");
+    });
+    elements.dualOff.addEventListener("click", () => {
+        setDualLyrics(false);
+        setStatus(elements.lyricsStatus, "Sung lyrics only. English translation stays saved on the song.");
+    });
+}
 elements.bgRandom.addEventListener("click", () => setBackgroundMode("random"));
 elements.bgImage.addEventListener("click", () => setBackgroundMode("image"));
 elements.bgVideo.addEventListener("click", () => setBackgroundMode("video"));
@@ -1731,15 +2880,22 @@ elements.particleCount.addEventListener("input", () => {
     particleCache.count = -1;
 });
 elements.syncLyrics.addEventListener("click", startLyricsSync);
+window.addEventListener("message", (event) => {
+    if (event.data?.type !== "yue2-video-studio-job") {
+        return;
+    }
+    void applyLyricsJobSnapshot(event.data.job, event.data.blocker);
+});
 function setCenterImage(on) {
     state.centerImage = Boolean(on);
     elements.centerImageOn.classList.toggle("active", state.centerImage);
     elements.centerImageOff.classList.toggle("active", !state.centerImage);
+    particleCache.count = -1;
     const status = document.getElementById("center-image-status");
     if (status) {
         setStatus(status, state.centerImage
-            ? "Circular cover sits in the visualizer."
-            : "Center image is off. Visualizer rings keep going.");
+            ? "Cover wraps circular presets around the thumbnail."
+            : "No thumbnail. Orbit, Pulse, Halo, Sunburst, Tunnel, and Arc fill the frame.");
     }
 }
 

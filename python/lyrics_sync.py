@@ -131,6 +131,9 @@ def run(job: Any, song_dir: Path, metadata: dict[str, Any]) -> dict[str, Any]:
         "HF_HOME": str(MODEL_ROOT / "huggingface"),
         "TORCH_HOME": str(MODEL_ROOT / "torch"),
         "HF_HUB_DISABLE_SYMLINKS_WARNING": "1",
+        "PYTHONIOENCODING": "utf-8",
+        "PYTHONUTF8": "1",
+        "PYTHONUNBUFFERED": "1",
     })
     MODEL_ROOT.mkdir(parents=True, exist_ok=True)
     process = subprocess.Popen(

@@ -95,6 +95,7 @@ export type VoiceProfile = {
   id: string; name: string; role: "female" | "male" | "backing" | "any";
   register: string; timbre: string; delivery: string; accent: string; vibrato: string;
   dynamics: string; harmony: string; effects: string; audition_notes: string; expanded: string;
+  tag?: string; avatar?: string;
   built_in: boolean; archived: boolean; created_at?: string; updated_at?: string; slot?: string;
 };
 export type VoiceCompileResult = { applied: boolean; description: string; preview: string; slots: VoiceSlots; snapshots: VoiceProfile[]; assignments?: string[] };
@@ -132,7 +133,7 @@ export const getAiKeys = () => request<AiKeysView>("/api/settings/ai-keys");
 export const saveAiKeys = (body: { providers?: Record<string, { key?: string; clear?: boolean }>; capabilities?: Record<string, { enabled?: boolean; provider?: string; model?: string }> }) => request<AiKeysView>("/api/settings/ai-keys", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 export type ChatMessage = { role: "user" | "assistant"; content: string };
 export const assistChat = (body: { messages: ChatMessage[]; language?: string; instrumental?: boolean }) => request<{ reply: string; brief: string; ready: boolean }>("/api/assist/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-export const assistWriting = (body: { action: "generate" | "optimize" | "title" | "describe" | "compose" | "effect"; idea?: string; random?: boolean; title?: string; description?: string; lyrics?: string; language?: string; instrumental?: boolean; effect_engine?: "stable" | "woosh" }) => request<{ lyrics?: string; title?: string; description?: string; references?: string }>("/api/assist/writing", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+export const assistWriting = (body: { action: "generate" | "optimize" | "title" | "describe" | "compose" | "effect" | "translate"; idea?: string; random?: boolean; title?: string; description?: string; lyrics?: string; language?: string; instrumental?: boolean; effect_engine?: "stable" | "woosh" }) => request<{ lyrics?: string; title?: string; description?: string; references?: string }>("/api/assist/writing", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 export const getVoiceProfiles = (archived = true) => request<{ items: VoiceProfile[] }>(`/api/voices?archived=${archived ? "true" : "false"}`);
 export const createVoiceProfile = (body: Partial<VoiceProfile>) => request<{ profile: VoiceProfile }>("/api/voices", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 export const updateVoiceProfile = (id: string, body: Partial<VoiceProfile>) => request<{ profile: VoiceProfile }>(`/api/voices/${encodeURIComponent(id)}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
@@ -140,6 +141,9 @@ export const duplicateVoiceProfile = (id: string) => request<{ profile: VoicePro
 export const archiveVoiceProfile = (id: string) => request<{ id: string; archived: boolean; deleted: boolean }>(`/api/voices/${encodeURIComponent(id)}`, { method: "DELETE" });
 export const importVoiceProfiles = (profiles: Partial<VoiceProfile>[]) => request<{ items: VoiceProfile[] }>("/api/voices/import", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ profiles }) });
 export const compileVoices = (body: { slots: VoiceSlots; lyrics?: string; description?: string; snapshots?: VoiceProfile[] }) => request<VoiceCompileResult>("/api/voices/compile", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+export const uploadVoiceAvatar = (id: string, file: File) => request<{ profile: VoiceProfile; avatar_url: string }>(`/api/voices/${encodeURIComponent(id)}/avatar?filename=${encodeURIComponent(file.name)}`, { method: "POST", headers: { "Content-Type": file.type || "application/octet-stream" }, body: file });
+export const generateVoiceAvatar = (id: string, direction = "") => request<{ profile: VoiceProfile; avatar_url: string }>(`/api/voices/${encodeURIComponent(id)}/avatar/generate`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ direction }) });
+export const voiceAvatarUrl = (id: string, updatedAt = "") => `/api/voices/${encodeURIComponent(id)}/avatar?v=${encodeURIComponent(updatedAt)}`;
 export const refreshModels = () => request<ModelStatus>("/api/models/refresh", { method: "POST" });
 export const clearMemory = () => request<{ cleared: boolean; had_worker: boolean }>("/api/clear-memory", { method: "POST" });
 export const getLibrary = () => request<{ items: Song[] }>("/api/library");
@@ -197,3 +201,6 @@ export async function videoStudioUrl(song: Song, workspace: string): Promise<str
 export type StudioCombineResult = { imports: StudioImport[]; tracks: StudioTrackState[]; removed: string[] };
 export const combineStudioTracks = (folder: string, tracks: StudioTrackState[], files: string[], name: string) => request<StudioCombineResult>(`/api/library/${encodeURIComponent(folder)}/studio/combine`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ tracks, files, name }) });
 export const uncombineStudioTracks = (folder: string, filename: string, tracks: StudioTrackState[]) => request<StudioCombineResult>(`/api/library/${encodeURIComponent(folder)}/studio/uncombine/${encodeURIComponent(filename)}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ tracks }) });
+
+export const getLyricPreferences = () => request<{ avoid: string }>("/api/settings/lyric-preferences");
+export const saveLyricPreferences = (avoid: string) => request<{ avoid: string }>("/api/settings/lyric-preferences", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ avoid }) });

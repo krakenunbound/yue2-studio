@@ -14,6 +14,8 @@ export type VoiceProfile = {
   effects: string;
   audition_notes: string;
   expanded: string;
+  tag?: string;
+  avatar?: string;
   built_in: boolean;
   archived: boolean;
   created_at?: string;
@@ -35,6 +37,8 @@ export const EMPTY_VOICE_PROFILE: VoiceProfile = {
   effects: "",
   audition_notes: "",
   expanded: "",
+  tag: "",
+  avatar: "",
   built_in: false,
   archived: false,
 };

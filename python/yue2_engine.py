@@ -31,16 +31,21 @@ MODEL_FILES = {
     "vae_config": VAE_ROOT / "config.json",
 }
 
+# Verse/Chorus slots invite hummed vocables. Keep timed sections, no sung form.
 INSTRUMENTAL_LYRICS = """[Intro]
 (instrumental)
-[Verse]
+[Instrumental]
 (instrumental)
-[Chorus]
+[Instrumental]
 (instrumental)
-[Bridge]
+[Instrumental]
 (instrumental)
 [Outro]
 (instrumental)"""
+INSTRUMENTAL_STYLE_LOCK = (
+    "instrumental, no vocals, no humming, no vocables, no oohs, no aahs, "
+    "no choir, no rap, no vocal chops, lead instrument only"
+)
 
 
 def _event(line: str, marker: str) -> str | None:
