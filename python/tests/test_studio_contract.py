@@ -20,8 +20,9 @@ class YuE2StudioContractTests(unittest.TestCase):
         elapsed = app.split("function elapsedLabel", 1)[1].split("function remainingLabel", 1)[0]
         self.assertIn("finished_at", elapsed)
         self.assertIn('generationJob?.status !== "succeeded"', app)
-        self.assertIn("createMediaElementSource", app)
+        self.assertNotIn("createMediaElementSource", app)
         self.assertIn("element.play()", app)
+        self.assertIn("autoPlay", app)
         self.assertIn(".job-banner.succeeded span", css)
 
     def test_instrumental_generation_uses_multi_section_conditioning(self):

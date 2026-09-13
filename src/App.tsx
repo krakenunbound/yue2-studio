@@ -464,34 +464,27 @@ function SongVisualizer({ src, timedLyrics, onEnded }: { src: string; timedLyric
   useEffect(() => {
     const element = audio.current; const surface = canvas.current;
     if (!element || !surface) return;
-    let context: AudioContext | null = null; let analyser: AnalyserNode | null = null; let source: MediaElementAudioSourceNode | null = null;
-    let data = new Uint8Array(64); const paint = surface.getContext("2d"); let frame = 0;
+    const paint = surface.getContext("2d"); let frame = 0;
     const draw = () => {
-      frame = requestAnimationFrame(draw); analyser?.getByteFrequencyData(data);
+      frame = requestAnimationFrame(draw);
       const ratio = window.devicePixelRatio || 1; const width = surface.clientWidth; const height = surface.clientHeight;
       if (surface.width !== width * ratio || surface.height !== height * ratio) { surface.width = width * ratio; surface.height = height * ratio; paint?.setTransform(ratio, 0, 0, ratio, 0, 0); }
       if (!paint) return; paint.clearRect(0, 0, width, height);
       const bars = 42; const gap = 3; const barWidth = Math.max(2, (width - gap * (bars - 1)) / bars);
       const gradient = paint.createLinearGradient(0, height, width, 0); gradient.addColorStop(0, "#55e6ee"); gradient.addColorStop(.58, "#7d65f4"); gradient.addColorStop(1, "#b654ff"); paint.fillStyle = gradient;
-      for (let index = 0; index < bars; index += 1) { const sample = data[Math.floor(index * data.length / bars)] / 255; const barHeight = Math.max(2, sample * height); paint.fillRect(index * (barWidth + gap), height - barHeight, barWidth, barHeight); }
+      const t = element.currentTime || 0;
+      const active = !element.paused;
+      for (let index = 0; index < bars; index += 1) {
+        const wave = active ? Math.abs(Math.sin(t * 6.2 + index * 0.41)) * 0.55 + Math.abs(Math.sin(t * 2.1 + index * 0.17)) * 0.45 : 0.08;
+        const barHeight = Math.max(2, wave * height);
+        paint.fillRect(index * (barWidth + gap), height - barHeight, barWidth, barHeight);
+      }
     };
-    context = new AudioContext();
-    analyser = context.createAnalyser();
-    analyser.fftSize = 128;
-    analyser.smoothingTimeConstant = 0.78;
-    data = new Uint8Array(analyser.frequencyBinCount);
-    try {
-      source = context.createMediaElementSource(element);
-      source.connect(analyser);
-      analyser.connect(context.destination);
-    } catch {
-      source = null;
-    }
-    const onPlay = () => { void context?.resume(); };
-    element.addEventListener("play", onPlay);
     draw();
-    void context.resume().then(() => element.play().catch(() => undefined));
-    return () => { element.removeEventListener("play", onPlay); cancelAnimationFrame(frame); source?.disconnect(); analyser?.disconnect(); if (context) void context.close(); };
+    const start = () => { void element.play().catch(() => undefined); };
+    if (element.readyState >= 2) start();
+    else element.addEventListener("canplay", start, { once: true });
+    return () => { element.removeEventListener("canplay", start); cancelAnimationFrame(frame); };
   }, [src]);
   useEffect(() => {
     const element = audio.current; if (!element) return;
@@ -522,7 +515,7 @@ function SongVisualizer({ src, timedLyrics, onEnded }: { src: string; timedLyric
       <span className="transport-volume-icon" aria-hidden="true">VOL</span>
       <input className="transport-volume" aria-label="Volume" type="range" min="0" max="1" step="0.01" value={volume} onChange={(event) => changeVolume(Number(event.target.value))} style={{ "--volume": `${volume * 100}%` } as React.CSSProperties} />
     </div>
-    <audio ref={audio} key={src} src={src} onEnded={() => { setIsPlaying(false); setCurrentTime(0); onEnded(); }} />
+    <audio ref={audio} key={src} src={src} preload="auto" autoPlay onEnded={() => { setIsPlaying(false); setCurrentTime(0); onEnded(); }} />
   </div>;
 }
 
