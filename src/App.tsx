@@ -389,7 +389,10 @@ function jobClock(seconds: number) {
 }
 
 function elapsedLabel(job: Job) {
-  return jobClock((Date.now() / 1000) - job.created_at);
+  const start = job.started_at ?? job.created_at;
+  const done = ["succeeded", "failed", "cancelled"].includes(job.status);
+  const end = done ? (job.finished_at ?? start) : Date.now() / 1000;
+  return jobClock(Math.max(0, end - start));
 }
 
 function remainingLabel(job: Job) {
@@ -463,12 +466,6 @@ function SongVisualizer({ src, timedLyrics, onEnded }: { src: string; timedLyric
     if (!element || !surface) return;
     let context: AudioContext | null = null; let analyser: AnalyserNode | null = null; let source: MediaElementAudioSourceNode | null = null;
     let data = new Uint8Array(64); const paint = surface.getContext("2d"); let frame = 0;
-    const beginAnalysis = async () => {
-      if (context) { if (context.state === "suspended") await context.resume(); return; }
-      context = new AudioContext(); analyser = context.createAnalyser(); analyser.fftSize = 128; analyser.smoothingTimeConstant = 0.78;
-      source = context.createMediaElementSource(element); source.connect(analyser); analyser.connect(context.destination); data = new Uint8Array(analyser.frequencyBinCount);
-      await context.resume();
-    };
     const draw = () => {
       frame = requestAnimationFrame(draw); analyser?.getByteFrequencyData(data);
       const ratio = window.devicePixelRatio || 1; const width = surface.clientWidth; const height = surface.clientHeight;
@@ -478,9 +475,23 @@ function SongVisualizer({ src, timedLyrics, onEnded }: { src: string; timedLyric
       const gradient = paint.createLinearGradient(0, height, width, 0); gradient.addColorStop(0, "#55e6ee"); gradient.addColorStop(.58, "#7d65f4"); gradient.addColorStop(1, "#b654ff"); paint.fillStyle = gradient;
       for (let index = 0; index < bars; index += 1) { const sample = data[Math.floor(index * data.length / bars)] / 255; const barHeight = Math.max(2, sample * height); paint.fillRect(index * (barWidth + gap), height - barHeight, barWidth, barHeight); }
     };
-    element.addEventListener("play", beginAnalysis); draw();
-    if (!element.paused) void beginAnalysis();
-    return () => { element.removeEventListener("play", beginAnalysis); cancelAnimationFrame(frame); source?.disconnect(); analyser?.disconnect(); if (context) void context.close(); };
+    context = new AudioContext();
+    analyser = context.createAnalyser();
+    analyser.fftSize = 128;
+    analyser.smoothingTimeConstant = 0.78;
+    data = new Uint8Array(analyser.frequencyBinCount);
+    try {
+      source = context.createMediaElementSource(element);
+      source.connect(analyser);
+      analyser.connect(context.destination);
+    } catch {
+      source = null;
+    }
+    const onPlay = () => { void context?.resume(); };
+    element.addEventListener("play", onPlay);
+    draw();
+    void context.resume().then(() => element.play().catch(() => undefined));
+    return () => { element.removeEventListener("play", onPlay); cancelAnimationFrame(frame); source?.disconnect(); analyser?.disconnect(); if (context) void context.close(); };
   }, [src]);
   useEffect(() => {
     const element = audio.current; if (!element) return;
@@ -511,7 +522,7 @@ function SongVisualizer({ src, timedLyrics, onEnded }: { src: string; timedLyric
       <span className="transport-volume-icon" aria-hidden="true">VOL</span>
       <input className="transport-volume" aria-label="Volume" type="range" min="0" max="1" step="0.01" value={volume} onChange={(event) => changeVolume(Number(event.target.value))} style={{ "--volume": `${volume * 100}%` } as React.CSSProperties} />
     </div>
-    <audio ref={audio} key={src} autoPlay src={src} onEnded={() => { setIsPlaying(false); setCurrentTime(0); onEnded(); }} />
+    <audio ref={audio} key={src} src={src} onEnded={() => { setIsPlaying(false); setCurrentTime(0); onEnded(); }} />
   </div>;
 }
 
@@ -767,6 +778,12 @@ export default function App() {
       }
     }, 1500);
     return () => window.clearInterval(timer);
+  }, [generationJob?.id, generationJob?.status]);
+
+  useEffect(() => {
+    if (generationJob?.status !== "succeeded") return;
+    const timer = window.setTimeout(() => setGenerationJob((current) => current?.id === generationJob.id ? null : current), 10000);
+    return () => window.clearTimeout(timer);
   }, [generationJob?.id, generationJob?.status]);
 
   useEffect(() => {

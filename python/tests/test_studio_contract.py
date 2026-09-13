@@ -14,6 +14,16 @@ import cover_art
 
 
 class YuE2StudioContractTests(unittest.TestCase):
+    def test_finished_jobs_freeze_elapsed_time(self):
+        app = (Path(__file__).resolve().parents[2] / "src" / "App.tsx").read_text(encoding="utf-8")
+        css = (Path(__file__).resolve().parents[2] / "src" / "App.css").read_text(encoding="utf-8")
+        elapsed = app.split("function elapsedLabel", 1)[1].split("function remainingLabel", 1)[0]
+        self.assertIn("finished_at", elapsed)
+        self.assertIn('generationJob?.status !== "succeeded"', app)
+        self.assertIn("createMediaElementSource", app)
+        self.assertIn("element.play()", app)
+        self.assertIn(".job-banner.succeeded span", css)
+
     def test_instrumental_generation_uses_multi_section_conditioning(self):
         lyrics = yue2_engine._lyrics_for_generation({"instrumental": True})
         sections = [line for line in lyrics.splitlines() if line.startswith("[")]

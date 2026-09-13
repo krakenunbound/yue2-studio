@@ -6,6 +6,7 @@ All notable changes to YuE2 Studio are documented here. The same notes are used 
 
 ### Fixed
 - SheetSage2 install rewrites `config.json` so the model uses the local MERT folder. Verification treated that rewrite as a missing file, so install always ended with “required files are still missing” and a 2 KB remaining download. Config is now marked mutable. Weights already on disk are reused.
+- After a song finishes, the library banner no longer keeps a red elapsed clock running. Playback connects the audio graph before play so the new track does not stall.
 
 ## [0.6.0] — 2026-09-13
 
