@@ -2,6 +2,11 @@
 
 All notable changes to YuE2 Studio are documented here. The same notes are used for GitHub releases.
 
+## [0.6.1] — 2026-09-13
+
+### Fixed
+- SheetSage2 install rewrites `config.json` so the model uses the local MERT folder. Verification treated that rewrite as a missing file, so install always ended with “required files are still missing” and a 2 KB remaining download. Config is now marked mutable. Weights already on disk are reused.
+
 ## [0.6.0] — 2026-09-13
 
 ### Added

@@ -421,7 +421,8 @@
       "url": "https://huggingface.co/m-a-p/SheetSage2/resolve/eab522a8168e8b8b8c4856bf8609cd86198f01fe/config.json",
       "bytes": 2060,
       "sha256": null,
-      "git_sha1": "e8eb3dc877ce5dcac60b3570e343634e0afbc44e"
+      "git_sha1": "e8eb3dc877ce5dcac60b3570e343634e0afbc44e",
+      "mutable": true
     },
     {
       "path": "models/sheetsage2/configuration_mert2.py",

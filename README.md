@@ -51,12 +51,16 @@ npm run build
 npm run tauri build -- --no-bundle
 ```
 
-The project version is 0.6.0. See [CHANGELOG.md](CHANGELOG.md) for the full list.
+The project version is 0.6.1. See [CHANGELOG.md](CHANGELOG.md) for the full list.
 
 ## Licenses and upstream work
 
 YuE2 Studio uses the published YuE2-3B inference package and model. Each model download retains its upstream license and may have additional terms. In particular, Stable Audio 3 requires accepting its Hugging Face access terms before it can be downloaded. See [LICENSE](LICENSE), [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md), and [APP_THIRD_PARTY_NOTICES.md](APP_THIRD_PARTY_NOTICES.md).
 
+
+## New in 0.6.1
+
+- SheetSage2 install no longer fails after it rewrites `config.json` to use the local MERT encoder. Already-downloaded weights are kept.
 
 ## New in 0.6.0
 

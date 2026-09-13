@@ -38,6 +38,14 @@ def test_cached_cover_transcription_skips_the_worker(tmp_path, monkeypatch):
     run.assert_not_called()
 
 
+def test_sheetsage_config_is_marked_mutable_in_the_catalog():
+    import json
+    from pathlib import Path
+    catalog = json.loads((Path(__file__).resolve().parents[1] / "model_catalog.json").read_text(encoding="utf-8"))
+    config = next(item for item in catalog["sheetsage"] if item["path"].endswith("config.json") and "mert" not in item["path"])
+    assert config.get("mutable") is True
+
+
 def test_cover_transcribe_requires_installed_model():
     from fastapi.testclient import TestClient
     with patch.object(main.sheetsage, "status", return_value={"ready": False, "detail": "Open Models to install SheetSage2 cover-from-audio."}):

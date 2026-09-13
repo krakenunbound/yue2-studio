@@ -5141,7 +5141,7 @@ dependencies = [
 
 [[package]]
 name = "yue2-studio"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "rfd",
  "serde",

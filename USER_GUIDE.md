@@ -1,6 +1,6 @@
 # YuE2 Studio user guide
 
-For version 0.6.0. Start with the quick start, then use the section for the task you want to do. The README gallery uses older screenshots; some controls have changed. Release notes: [CHANGELOG.md](CHANGELOG.md).
+For version 0.6.1. Start with the quick start, then use the section for the task you want to do. The README gallery uses older screenshots; some controls have changed. Release notes: [CHANGELOG.md](CHANGELOG.md).
 
 ## Contents
 

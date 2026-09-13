@@ -39,7 +39,7 @@ import model_manager
 
 install(LOGS_ROOT)
 log = logging.getLogger("yue2.studio")
-app = FastAPI(title="YuE2 Studio", version="0.6.0")
+app = FastAPI(title="YuE2 Studio", version="0.6.1")
 
 
 @app.middleware("http")

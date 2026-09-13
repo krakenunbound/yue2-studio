@@ -108,6 +108,24 @@ def test_git_identity_does_not_normalize_binary_entries(installer):
     assert not mm._verified(item, path)
 
 
+def test_mutable_catalog_file_stays_present_after_local_rewrite(installer):
+    original = b'{"base_model_name_or_path": "m-a-p/MERT-v2-FullSong"}\n'
+    item = {
+        'path': 'models/sheetsage2/config.json',
+        'url': 'https://huggingface.co/example/resolve/revision/config.json',
+        'bytes': len(original),
+        'git_sha1': hashlib.sha1(b'blob ' + str(len(original)).encode() + b'\0' + original).hexdigest(),
+        'mutable': True,
+    }
+    path = mm.target(item)
+    path.parent.mkdir(parents=True)
+    path.write_bytes(original)
+    path.write_text('{"base_model_name_or_path": "F:\\\\YuE2-3B\\\\models\\\\sheetsage2\\\\mert"}\n', encoding='utf-8')
+    assert mm._has_file(item)
+    assert mm._verified(item, path)
+    assert mm._remaining(item) == 0
+
+
 def test_git_identity_keeps_exact_binary_entries(installer):
     data = b'wheel\0payload\r\n'
     item = {

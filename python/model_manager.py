@@ -66,6 +66,9 @@ def _has_file(entry):
     path = target(entry)
     if not path.is_file():
         return False
+    # Rewritten after download (SheetSage2 local MERT path). Presence is enough.
+    if entry.get('mutable'):
+        return path.stat().st_size > 0
     # Hugging Face records Git blob IDs over LF content.  A Windows checkout
     # with core.autocrlf enabled has the same text content, but a larger file.
     # Only catalogued Git text files use this normalization; weight files keep
@@ -162,6 +165,8 @@ def _git_blob_matches(entry, path):
 def _verified(entry, path):
     if not path.is_file():
         return False
+    if entry.get('mutable'):
+        return path.stat().st_size > 0
     if entry.get('git_sha1'):
         return _git_blob_matches(entry, path)
     if path.stat().st_size != entry['bytes']:
@@ -321,8 +326,10 @@ def _install(key, token):
             import sheetsage
             sheetsage.prepare_local_parent()
         _check_cancel()
-        if not runtime_ready(key) or not all(_has_file(entry) for entry in entries):
-            raise RuntimeError('Installation finished but required files are still missing. See Logs.')
+        missing = [entry['path'] for entry in entries if not _has_file(entry)]
+        if not runtime_ready(key) or missing:
+            detail = ', '.join(missing[:8]) if missing else 'private runtime'
+            raise RuntimeError(f'Installation finished but required files are still missing: {detail}')
         _update(key,status='succeeded',phase='Installed and verified',progress=1,error=None)
         log.info('Model installation complete: %s', key)
     except InterruptedError as error:
