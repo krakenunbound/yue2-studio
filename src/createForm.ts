@@ -68,6 +68,40 @@ export function needsAutoTitle(title: string): boolean {
   return !value || value.toLowerCase() === "untitled song" || value.toLowerCase() === "untitled";
 }
 
+export function songHasScore(song: { abc_score?: string | null; has_score?: boolean }): boolean {
+  return Boolean(song.has_score || song.abc_score?.trim());
+}
+
+/** Strip quoted chords from music lines only. Keep native Vocal/Ins headers. */
+export function melodyOnlyAbc(abc: string): string {
+  return abc.split(/(?<=\n)/).map((line) => {
+    const trimmed = line.trimStart();
+    if (/^(X:|T:|M:|L:|Q:|V:|K:|%)/i.test(trimmed)) return line;
+    return line.replace(/"[^"\n]*"/g, "");
+  }).join("").replace(/[ \t]{2,}/g, " ").replace(/[ \t]+\n/g, "\n").trim();
+}
+
+export function remixTitleFor(title: string): string {
+  const base = (title || "Song").trim() || "Song";
+  if (/\bremix$/i.test(base)) return base.slice(0, 120);
+  return `${base} remix`.slice(0, 120);
+}
+
+export const REMIX_LIMITS =
+  "Creates a new recording from this song's saved score. Keeps the tune, not the original singer, mix, or vocal take. Without lyrics, YuE2 sings English-like gibberish.";
+
+export const REMIX_NO_SCORE =
+  "This song has no saved score. Remix needs Full or Melody planning (not Off).";
+
+export const COVER_LIMITS =
+  "SheetSage2 reads this recording into a lead sheet, then YuE2 sings a new performance. Keeps the transcribed tune, not the original singer, mix, or vocal take. Review the ABC before generating.";
+
+export function coverTitleFor(title: string): string {
+  const base = (title || "Song").trim() || "Song";
+  if (/\bcover$/i.test(base)) return base.slice(0, 120);
+  return `${base} cover`.slice(0, 120);
+}
+
 export function voiceSlotsAssigned(slots: VoiceSlots): boolean {
   return Boolean(slots.female || slots.male || slots.backing);
 }

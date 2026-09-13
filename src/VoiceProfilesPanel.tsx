@@ -178,7 +178,7 @@ export default function VoiceProfilesPanel({ profiles, slots, lyrics, descriptio
         <button type="button" className="ghost-link" onClick={() => void showCompiled()}>View compiled prompt</button>
         <small>{assigned.female?.name || "None"} · {assigned.male?.name || "None"} · {assigned.backing?.name || "None"}</small>
       </div>
-      {compiled && <div className="compiled-prompt"><header><strong>{compiled.applied ? "What YuE2 will receive for vocals" : "No characters assigned"}</strong><button type="button" onClick={() => setCompiled(null)}>✕</button></header><pre>{compiled.preview}</pre></div>}
+      {compiled && <div className="compiled-prompt"><header><strong>{compiled.applied ? "What YuE2 will receive" : "No characters assigned"}</strong><button type="button" onClick={() => setCompiled(null)}>✕</button></header><pre>{compiled.preview}</pre></div>}
       {error && !pickerSlot && <div className="error">{error}</div>}
 
       {pickerSlot && <div className="modal-backdrop" role="presentation" onPointerDown={(event) => { if (event.target === event.currentTarget && !busy) { setPickerSlot(null); setEditing(null); } }}>

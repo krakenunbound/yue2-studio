@@ -27,8 +27,9 @@ DEFINITIONS = {
     'cover_art': ('Cover art — Stable Diffusion 1.5', 'Creates square artwork for your songs on your NVIDIA GPU.', 'Installs Juggernaut Aftermath (an SD 1.5 model), its local configuration and image-generation runtime.', True, 'models/cover_art', 'main', ('diffusers','transformers','accelerate','torch'), 5, 25, 'https://civitai.com/models/46422/juggernaut?modelVersionId=127207'),
     'stems': ('Separate vocals and instruments', 'Splits a song into vocals, drums, bass and other instruments.', 'Installs Demucs and its htdemucs separation model for the Studio.', True, 'models/stems', 'main', ('demucs','torch','torchaudio'), 5, 25, 'https://github.com/facebookresearch/demucs'),
     'sound_effects': ('Sound effects — Stable Audio 3', 'Creates effects such as footsteps, impacts and ambience from text.', 'Installs the sound model, its text encoder and a separate CPU runtime. CPU generation can be slow, but leaves the GPU free.', True, 'models/sound_effects/stable-audio-3-small-sfx', 'sfx', ('stable_audio_3','torch','torchaudio'), 2, 10, 'https://huggingface.co/stabilityai/stable-audio-3-small-sfx'),
+    'sheetsage': ('SheetSage2 cover from audio', 'Turns a recording into an editable lead sheet so YuE2 can cover it.', 'Installs SheetSage2, its MERT-v2 encoder, and a private GPU runtime. Weights are for non-commercial use (CC-BY-NC). Uses the GPU; YuE2 waits while it transcribes.', True, 'models/sheetsage2', 'sheetsage', ('transformers','torch','torchaudio'), 6, 16, 'https://huggingface.co/m-a-p/SheetSage2'),
 }
-RUNTIME_DIRS = {'woosh':'python/woosh_runtime','main':'python/runtime', 'lyrics':'python/lyrics_runtime', 'sfx':'python/sfx_runtime'}
+RUNTIME_DIRS = {'woosh':'python/woosh_runtime','main':'python/runtime', 'lyrics':'python/lyrics_runtime', 'sfx':'python/sfx_runtime', 'sheetsage':'python/sheetsage_runtime'}
 STATE_FILE = OUTPUTS_ROOT / 'settings' / 'model-installations.json'
 _lock = threading.RLock()
 activity_lock = threading.RLock()
@@ -288,7 +289,7 @@ def _install_runtime(key):
         return
     except RuntimeError:
         pass
-    version, index = ('2.8.0','cu128') if key == 'whisper' else (('2.7.1','cpu') if key == 'sound_effects' else ('2.10.0','cu128'))
+    version, index = ('2.8.0','cu128') if key in {'whisper', 'sheetsage'} else (('2.7.1','cpu') if key == 'sound_effects' else ('2.10.0','cu128'))
     _run(key,[str(runtime),'-m','pip','install',f'torch=={version}',f'torchaudio=={version}','--index-url',f'https://download.pytorch.org/whl/{index}'], 'Installing runtime — this can take several minutes')
     packages = {
         'yue2':[str(ROOT/'yue2_infer-0.1.5-py3-none-any.whl'),'-r',str(ROOT/'python/engine-requirements.txt')],
@@ -296,6 +297,7 @@ def _install_runtime(key):
         'cover_art':['diffusers==0.37.0','transformers==4.57.6','accelerate==1.13.0','pillow','omegaconf'],
         'stems':['demucs==4.0.1'],
         'sound_effects':['https://github.com/Stability-AI/stable-audio-3/archive/a0b57f5483c4588f827f3552b7d5c6ca2a9687be.zip'],
+        'sheetsage':['transformers==4.45.2','huggingface-hub==0.36.0','safetensors==0.5.3','pretty_midi==0.2.10','mido==1.3.3','scipy'],
     }[key]
     _run(key,[str(runtime),'-m','pip','install',*packages], 'Installing feature support')
     _run(key,[str(runtime),'-c','; '.join('import '+name for name in modules)],'Verifying installed runtime')
@@ -315,6 +317,9 @@ def _install(key, token):
         _update(key, progress=.75)
         if key != 'woosh':
             _install_runtime(key)
+        if key == 'sheetsage':
+            import sheetsage
+            sheetsage.prepare_local_parent()
         _check_cancel()
         if not runtime_ready(key) or not all(_has_file(entry) for entry in entries):
             raise RuntimeError('Installation finished but required files are still missing. See Logs.')

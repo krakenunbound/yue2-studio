@@ -8,6 +8,7 @@ python/venv/
 python/runtime/
 python/lyrics_runtime/
 python/sfx_runtime/
+python/sheetsage_runtime/
 python/_runtime_probe/
 python/vendor/ComfyUI/
 python/**/__pycache__/

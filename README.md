@@ -51,12 +51,19 @@ npm run build
 npm run tauri build -- --no-bundle
 ```
 
-The project version is 0.5.1.
+The project version is 0.6.0. See [CHANGELOG.md](CHANGELOG.md) for the full list.
 
 ## Licenses and upstream work
 
 YuE2 Studio uses the published YuE2-3B inference package and model. Each model download retains its upstream license and may have additional terms. In particular, Stable Audio 3 requires accepting its Hugging Face access terms before it can be downloaded. See [LICENSE](LICENSE), [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md), and [APP_THIRD_PARTY_NOTICES.md](APP_THIRD_PARTY_NOTICES.md).
 
+
+## New in 0.6.0
+
+- Remix a library song from its saved score, or cover from audio with optional SheetSage2 transcription.
+- Generation follows official YuE2 style and lyric contracts; Off-mode CFG uses 1.01; voice compile is compact and applied on generate.
+- Video Studio splits scene color from visualizers, drops weak presets, anchors Peak/Bars/Wave/Grid/EQ to the bottom in both aspect ratios, and speeds capture (no per-tick video seeking, cached note sprites, YuE2 unload before render, faster FFmpeg).
+- Playback no longer remounts on status polls; library listing no longer renames audio files.
 
 ## New in 0.5.1
 

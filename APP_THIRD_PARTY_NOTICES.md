@@ -11,7 +11,7 @@ YuE2 Studio uses the following third-party components. The Windows installer inc
 | imageio-ffmpeg / FFmpeg | https://github.com/imageio/imageio-ffmpeg | Local media conversion; bundled distribution notices accompany the Python package. |
 | Demucs | https://github.com/facebookresearch/demucs | MIT-licensed local GPU source separation; the optional `htdemucs` checkpoint is stored under `models/stems/`. |
 
-YuE2, Whisper, Stable Diffusion and Stable Audio downloads retain their respective publishers' terms. Downloading Stable Audio requires publisher access. No Gemini key, Hugging Face token, personal library, or developer settings are included in the installer.
+YuE2, SheetSage2, Whisper, Stable Diffusion and Stable Audio downloads retain their respective publishers' terms. Downloading Stable Audio requires publisher access. No Gemini key, Hugging Face token, personal library, or developer settings are included in the installer.
 
 This document is a navigation aid, not a replacement for the component's upstream license terms.
 

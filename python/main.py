@@ -28,6 +28,7 @@ from log_buffer import install, ring
 import yue2_engine
 import cover_art
 import lyrics_sync
+import sheetsage
 import generation_timing
 import stable_sfx
 import ai_vault
@@ -38,14 +39,14 @@ import model_manager
 
 install(LOGS_ROOT)
 log = logging.getLogger("yue2.studio")
-app = FastAPI(title="YuE2 Studio", version="0.5.1")
+app = FastAPI(title="YuE2 Studio", version="0.6.0")
 
 
 @app.middleware("http")
 async def protect_installation(request: Request, call_next):
     path = request.url.path
     uses_runtime = path in {"/api/generate", "/api/effects/generate", "/api/video/render"} or (
-        path.startswith("/api/library/") and path.endswith(("/cover", "/stems", "/lyrics-sync", "/studio/generate-sfx", "/studio/bounce")))
+        path.startswith("/api/library/") and path.endswith(("/cover", "/stems", "/lyrics-sync", "/cover-transcribe", "/studio/generate-sfx", "/studio/bounce")))
     if request.method == "POST" and uses_runtime and model_manager.busy():
         return Response(content=json.dumps({"detail":"A model installation is running. Wait for it to finish before generating."}), status_code=409, media_type="application/json")
     return await call_next(request)
@@ -289,6 +290,11 @@ class StemRequest(BaseModel):
     mode: str = Field(default="2", pattern="^(2|4)$")
 
 
+class CoverTranscribeRequest(BaseModel):
+    melody_only: bool = True
+    reuse_cached: bool = True
+
+
 class SoundEffectRequest(BaseModel):
     prompt: str = Field(min_length=3, max_length=1000)
     name: str = Field(default="", max_length=80)
@@ -398,8 +404,89 @@ PERFORMANCE_TAGS = {
 }
 
 
+_STYLE_FIELD = re.compile(
+    r"(?im)^\s*(?:#{1,6}\s*)?(Basic Attributes|Global Emotional Progression|"
+    r"Vocal Gender & Timbre|Vocal Style|Instrument Lifecycle|"
+    r"Sonics & Production Profile|Groove & Foundation Progression)\s*:\s*(.+)$"
+)
+_STYLE_HEADING = re.compile(
+    r"(?im)^\s*(?:#{1,6}\s*)?(Global Metadata|Vocal Details|Arrangement)\s*:?\s*$"
+)
+_ABC_HEADER = re.compile(r"(?i)^(X:|T:|M:|L:|Q:|V:|K:|%)")
+
+
+def looks_structured_style(text: str) -> bool:
+    return bool(_STYLE_HEADING.search(text or ""))
+
+
+def _first_clause(value: str, cap: int = 140) -> str:
+    text = re.sub(r"\s+", " ", value or "").strip().rstrip(".,;:")
+    if not text:
+        return ""
+    cut = re.search(r"[.;](\s|$)", text)
+    if cut:
+        text = text[: cut.start()].strip()
+    if len(text) > cap:
+        text = text[:cap].rsplit(" ", 1)[0].strip()
+    return text
+
+
+def flatten_style(description: str, *, keep_vocal_fields: bool = True) -> str:
+    """Turn leftover MiniMax caption essays into one YuE2 comma-separated style line."""
+    text = (description or "").strip()
+    if not text:
+        return ""
+    if not looks_structured_style(text):
+        return re.sub(r"\s+", " ", text).strip()
+    found: dict[str, str] = {}
+    for match in _STYLE_FIELD.finditer(text):
+        found.setdefault(match.group(1), match.group(2).strip())
+    order = (
+        "Basic Attributes", "Vocal Gender & Timbre", "Vocal Style",
+        "Instrument Lifecycle", "Global Emotional Progression",
+        "Sonics & Production Profile", "Groove & Foundation Progression",
+    )
+    if not keep_vocal_fields:
+        order = tuple(name for name in order if name not in {"Vocal Gender & Timbre", "Vocal Style"})
+    parts = [_first_clause(found[name]) for name in order if found.get(name)]
+    leftovers = []
+    section = ""
+    for line in text.splitlines():
+        heading = _STYLE_HEADING.match(line)
+        if heading:
+            section = heading.group(1)
+            continue
+        if _STYLE_FIELD.match(line):
+            continue
+        if section in {"Global Metadata", "Vocal Details"}:
+            continue
+        clause = _first_clause(line)
+        if clause:
+            leftovers.append(clause)
+    combined = [part for part in (*parts, *leftovers) if part]
+    return ", ".join(combined)
+
+
+def melody_only_abc(abc: str) -> str:
+    """Remove quoted chord symbols from music lines; keep native Vocal/Ins headers."""
+    lines = []
+    for line in (abc or "").splitlines(keepends=True):
+        if _ABC_HEADER.match(line.lstrip()):
+            lines.append(line)
+            continue
+        lines.append(re.sub(r'"[^"\n]*"', "", line))
+    return "".join(lines)
+
+
+def native_cfg_scale(cot: str, cfg: float) -> float:
+    """Official semantic CFG is 1.0 for full/melody and 1.01 for off."""
+    if cot == "off" and abs(cfg - 1.0) < 1e-9:
+        return 1.01
+    return cfg
+
+
 def prepare_music3_lyrics(value: str) -> tuple[str, list[str]]:
-    """Keep lyrics literal and move verbose bracket directions into the caption."""
+    """Keep lyrics as sung words. Move bracket performance notes into the style prompt."""
     output: list[str] = []
     directions: list[str] = []
     last_tag = ""
@@ -455,19 +542,17 @@ def prepare_music3_lyrics(value: str) -> tuple[str, list[str]]:
 
 
 def music3_caption(description: str, directions: list[str]) -> str:
+    """Append performance notes to a compact YuE2 style string. Never invent MiniMax headings."""
+    style = flatten_style(description)
     if not directions:
-        return description
-    notes = "; ".join(directions)[:3000]
-    direction_line = (
-        "Section Performance and Singer Assignments: "
-        f"{notes}. These are production instructions only; never sing, speak, or recite the wording of these notes."
-    )
-    arrangement = re.search(r"(?im)^\s*(?:#{1,6}\s*)?Arrangement\s*:?\s*$", description)
-    if arrangement:
-        before = description[: arrangement.start()].rstrip()
-        after = description[arrangement.start() :].lstrip()
-        return f"{before}\n{direction_line}\n\n{after}"
-    return f"{description.rstrip()}\n{direction_line}"
+        return style
+    notes = "; ".join(directions)[:1500]
+    extra = f"{notes}. These notes are style, not lyrics"
+    if extra.casefold() in style.casefold():
+        return style
+    if not style:
+        return extra
+    return f"{style.rstrip().rstrip(',')}, {extra}"
 
 
 _MUSIC3_PUNCTUATION = str.maketrans({
@@ -495,18 +580,28 @@ def prepare_generation_params(params: dict) -> dict:
     prepared = dict(params)
     safe_description = str(prepared["description"]).replace("\ufeff", "").strip()
     safe_lyrics = str(prepared["lyrics"]).replace("\ufeff", "").strip()
+    style = flatten_style(safe_description)
     if prepared["instrumental"]:
         prepared["rendered_lyrics"] = yue2_engine.INSTRUMENTAL_LYRICS
         lock = yue2_engine.INSTRUMENTAL_STYLE_LOCK
+        style = re.sub(r"(?i)\bSinger [AB]\s*(?:\([^)]+\))?,?\s*", "", style).strip(" ,")
         prepared["generation_description"] = (
-            safe_description if safe_description.casefold().startswith(lock)
-            else f"{lock}. {safe_description}".strip()
+            style if style.casefold().startswith(lock.casefold())
+            else f"{lock}. {style}".strip(" .")
         )
         prepared["voice_snapshots"] = []
     else:
-        prepared["rendered_lyrics"] = safe_lyrics
-        prepared["generation_description"] = safe_description
-        prepared["voice_snapshots"] = []
+        lyrics, directions = prepare_music3_lyrics(safe_lyrics)
+        compiled = voice_profiles.compile_for_generation(
+            style, prepared.get("voice_slots") or {}, lyrics, prepared.get("voice_snapshots")
+        )
+        if compiled["applied"]:
+            style = compiled["description"]
+            prepared["voice_snapshots"] = compiled["snapshots"]
+        else:
+            prepared["voice_snapshots"] = []
+        prepared["rendered_lyrics"] = lyrics
+        prepared["generation_description"] = music3_caption(style, directions)
     prepared["abc_score"] = str(prepared.get("abc_score") or "").strip() or None
     if prepared["abc_score"] and prepared["cot_mode"] == "off":
         raise HTTPException(422, detail="An ABC score requires Full or Melody planning mode.")
@@ -860,22 +955,34 @@ def generate(job: Job) -> dict:
         raise
 
 
+ABC_SCORE_MAX = 24000
+
+
+def read_song_abc(song_dir: Path, metadata: dict | None = None) -> str:
+    """Prefer the planned score YuE2 wrote, then any ABC saved with the request."""
+    score_path = song_dir / "score.abc"
+    if score_path.is_file():
+        try:
+            text = score_path.read_text(encoding="utf-8").strip()
+            if text:
+                return text[:ABC_SCORE_MAX]
+        except (OSError, UnicodeError):
+            pass
+    return str((metadata or {}).get("abc_score") or "").strip()[:ABC_SCORE_MAX]
+
+
 def library() -> list[dict]:
     LIBRARY_ROOT.mkdir(parents=True, exist_ok=True)
     items = []
     for manifest in LIBRARY_ROOT.glob("*/song.json"):
         try:
             item = json.loads(manifest.read_text(encoding="utf-8"))
-            audio = align_audio_to_title(manifest.parent, item, str(item.get("title") or "song"))
-            if item.get("audio") != audio.name:
-                item["audio"] = audio.name
-                try:
-                    manifest.write_text(json.dumps(item, indent=2, ensure_ascii=False), encoding="utf-8")
-                except OSError:
-                    pass
+            audio = song_audio_file(manifest.parent, item)
             if audio.is_file():
+                planned = read_song_abc(manifest.parent, item)
                 items.append({
                     **item,
+                    "has_score": bool(planned),
                     "folder": str(manifest.parent),
                     "folder_name": manifest.parent.name,
                     "audio_url": song_audio_url(manifest.parent.name, audio),
@@ -982,6 +1089,12 @@ def video_studio_page():
     return FileResponse(VIDEO_STUDIO_ROOT / "index.html", media_type="text/html")
 
 
+@app.post("/api/video/prepare")
+def prepare_video_render():
+    """Drop the YuE2 GPU worker so the browser can decode video and capture the canvas."""
+    return yue2_engine.unload()
+
+
 @app.post("/api/video/render")
 async def render_visualizer_video(request: Request, title: str = "visualizer"):
     """Convert the browser's canvas/audio capture to a shareable H.264 MP4."""
@@ -1005,8 +1118,8 @@ async def render_visualizer_video(request: Request, title: str = "visualizer"):
             raise HTTPException(400, "The browser did not return a video recording")
         command = [
             ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-i", str(source),
-            "-c:v", "libx264", "-preset", "medium", "-crf", "18", "-pix_fmt", "yuv420p",
-            "-c:a", "aac", "-b:a", "256k", "-movflags", "+faststart", str(target),
+            "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p",
+            "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", str(target),
         ]
         completed = subprocess.run(
             command, capture_output=True, text=True, timeout=3600,
@@ -1022,7 +1135,11 @@ async def render_visualizer_video(request: Request, title: str = "visualizer"):
 @app.get("/api/status")
 def status():
     ffmpeg = ffmpeg_path()
-    return {"model": yue2_engine.model_status(), "cover_art": cover_art.status(), "stems": stems_status(), "sound_effects": stable_sfx.status(), "lyrics_sync": lyrics_sync.status(), "exports": {"ready": bool(ffmpeg), "detail": "MP3 and FLAC export ready" if ffmpeg else "Run Setup to install the private FFmpeg exporter"}, "service": inference_status(), "gpu": gpu_status(), "ai": ai_vault.status(), "jobs": [job.snapshot() for job in manager.list()[:30]]}
+    try:
+        sheetsage_status = sheetsage.status()
+    except Exception:
+        sheetsage_status = {"ready": False, "detail": "SheetSage2 status could not be read."}
+    return {"model": yue2_engine.model_status(), "cover_art": cover_art.status(), "stems": stems_status(), "sound_effects": stable_sfx.status(), "lyrics_sync": lyrics_sync.status(), "sheetsage": sheetsage_status, "exports": {"ready": bool(ffmpeg), "detail": "MP3 and FLAC export ready" if ffmpeg else "Run Setup to install the private FFmpeg exporter"}, "service": inference_status(), "gpu": gpu_status(), "ai": ai_vault.status(), "jobs": [job.snapshot() for job in manager.list()[:30]]}
 
 
 class LyricPreferencesRequest(BaseModel):
@@ -1190,7 +1307,7 @@ def assist_writing(request: WritingAssistRequest):
                 raise ValueError("Enter a sound description first.")
             return ai_assist.enhance_effect(request.description, engine=request.effect_engine)
         if request.action == "compose":
-            # One line in, title + structured caption + tagged lyrics out.
+            # One line in, title + compact YuE2 style + tagged lyrics out.
             return ai_assist.compose(
                 idea=request.idea or request.description,
                 title=request.title,
@@ -1198,8 +1315,7 @@ def assist_writing(request: WritingAssistRequest):
                 instrumental=request.instrumental,
             )
         if request.action == "describe":
-            # The structured caption is the style input that steers YuE2,
-            # so it gets its own prompt pack and its own reference retrieval.
+            # Compact YuE2 style is the text that steers generation.
             return ai_assist.describe(
                 description=request.description,
                 title=request.title,
@@ -1267,6 +1383,8 @@ def cancel(job_id: str):
         lyrics_sync.cancel()
     elif was_running and target and target.kind == "stable_sfx":
         stable_sfx.cancel(target)
+    elif was_running and target and target.kind == "sheetsage":
+        sheetsage.cancel()
     return {"status": "cancelling"}
 
 @app.websocket("/ws/jobs/{job_id}")
@@ -2103,6 +2221,51 @@ def start_lyrics_synchronization(folder: str):
     if not state["ready"]:
         raise HTTPException(409, state["detail"])
     job = manager.submit("lyrics_sync", {"folder": folder}, synchronize_song_lyrics)
+    return {"job": job.snapshot()}
+
+
+def transcribe_cover_score(job: Job) -> dict:
+    song_dir = resolve_song_folder(str(job.params["folder"]))
+    melody_only = bool(job.params.get("melody_only", True))
+    if job.params.get("reuse_cached"):
+        cached = sheetsage.load_score(song_dir, melody_only)
+        if cached:
+            job.phase, job.progress = "Using saved lead sheet", 1.0
+            job.emit()
+            return {
+                "folder": song_dir.name,
+                "abc": cached,
+                "melody_only": melody_only,
+                "warnings": [],
+                "cached": True,
+                "path": str(sheetsage.score_path(song_dir, melody_only)),
+            }
+    yue2_engine.unload()
+    return sheetsage.run(job, song_dir, song_audio_file(song_dir), melody_only)
+
+
+@app.get("/api/library/{folder}/score")
+def song_planned_score(folder: str):
+    song_dir = resolve_song_folder(folder)
+    try:
+        metadata = json.loads((song_dir / "song.json").read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        metadata = {}
+    abc = read_song_abc(song_dir, metadata)
+    return {"abc": abc, "has_score": bool(abc)}
+
+
+@app.post("/api/library/{folder}/cover-transcribe")
+def start_cover_transcription(folder: str, request: CoverTranscribeRequest):
+    state = sheetsage.status()
+    if not state["ready"]:
+        raise HTTPException(409, state["detail"])
+    resolve_song_folder(folder)
+    job = manager.submit(
+        "sheetsage",
+        {"folder": folder, "melody_only": request.melody_only, "reuse_cached": request.reuse_cached},
+        transcribe_cover_score,
+    )
     return {"job": job.snapshot()}
 
 

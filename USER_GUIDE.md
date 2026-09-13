@@ -1,6 +1,6 @@
 # YuE2 Studio user guide
 
-For version 0.5.1. Start with the quick start, then use the section for the task you want to do. The README gallery uses older screenshots; some controls have changed.
+For version 0.6.0. Start with the quick start, then use the section for the task you want to do. The README gallery uses older screenshots; some controls have changed. Release notes: [CHANGELOG.md](CHANGELOG.md).
 
 ## Contents
 
@@ -44,6 +44,7 @@ Close the app before installing an update. Back up your work first. The installe
 | Separate vocals and instruments | Vocals, drums, bass and other stems | Installs Demucs/htdemucs for Studio. Separation is approximate; bleed and artifacts can remain. |
 | Sound effects — Stable Audio 3 | Text-driven sound effects | Small SFX model in its own CPU runtime; leaves the GPU free but can be slow. Publisher access terms may be required. |
 | Sound effects — Sony Woosh-Flow | Short text-driven effects on GPU | Up to five seconds; installs all three model components, tokenizer, pinned source and a private Python 3.12/CUDA runtime. Weights are CC-BY-NC, for non-commercial use. |
+| SheetSage2 cover from audio | Transcribe a recording into a lead sheet, then cover it with YuE2 | Installs SheetSage2 and MERT-v2-FullSong in a private GPU runtime. CC-BY-NC. YuE2 unloads while it transcribes. |
 
 **Already installed features are hidden.** A missing button can mean the feature is already ready. Use **Refresh and check space**, then check its working page. A partial installation should appear as needing setup.
 
@@ -55,7 +56,7 @@ This app has been used on an RTX 3090 with 24 GB VRAM. File size is not the same
 
 ## Create: writing and generating songs
 
-**Easy mode** offers a simpler starting point. **Custom mode** gives more direct control over the model description, lyrics and generation settings. Templates provide structured examples; they are starting points rather than promises of a particular sound.
+**Easy mode** offers a simpler starting point. **Custom mode** gives more direct control over the model description, lyrics and generation settings. Templates fill a compact YuE2 style line; they are starting points rather than promises of a particular sound.
 
 ### A useful music description
 
@@ -89,6 +90,8 @@ Library is the main list of songs and exported Studio mixes. Play a result and u
 
 - **Edit song details** changes the saved description, title or lyrics. Changing text does not regenerate the recording.
 - **Reuse as new song** starts another generation from saved information; it does not replace the original audio.
+- **Remix this song** generates a new recording from the saved score. **Keep the melody** writes a new arrangement; **Keep melody and chords** keeps the harmony. It does not keep the original singer, mix, or vocal take. Hover the menu item for those limits. Without lyrics, YuE2 sings English-like gibberish. Songs generated with planning Off have no score to remix.
+- **Cover from audio** uses SheetSage2 to transcribe the recording, then YuE2 re-sings it. Review the ABC before generating. Install SheetSage2 in Models first. This is not a mix remix of the original vocal take.
 - **Playlists** collect songs for listening. **Workspaces** help organize separate bodies of work.
 - **Studio Projects** provides access to saved editing work.
 - **Open song folder** exposes the actual files for backup or use elsewhere.

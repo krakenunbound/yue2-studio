@@ -67,8 +67,6 @@ const elements = {
     imageInput: document.getElementById("image-input"),
     videoInput: document.getElementById("video-input"),
     bgDim: document.getElementById("bg-dim"),
-    primaryColor: document.getElementById("primary-color"),
-    secondaryColor: document.getElementById("secondary-color"),
     particleCount: document.getElementById("particle-count"),
     lyricsOn: document.getElementById("lyrics-on"),
     lyricsOff: document.getElementById("lyrics-off"),
@@ -87,14 +85,15 @@ const elements = {
     downloadFrame: document.getElementById("download-frame"),
 };
 
-const ctx = elements.canvas.getContext("2d");
+const ctx = elements.canvas.getContext("2d", { alpha: false, desynchronized: true });
 const state = {
     preset: "orbit",
     aspectMode: "landscape",
     backgroundMode: "random",
     backgroundDim: Number(elements.bgDim.value) / 100,
-    primaryColor: elements.primaryColor.value,
-    secondaryColor: elements.secondaryColor.value,
+    sceneA: "#000000",
+    sceneB: "#000000",
+    sceneKind: "solid",
     particleStyle: "dust",
     particleCount: Number(elements.particleCount.value),
     lyricsEnabled: Boolean(initialLyricsUrl),
@@ -106,6 +105,7 @@ const state = {
     lyricsPollTimer: null,
     lyricsSyncBusy: false,
     lyricsPollFailures: 0,
+    lyricsSyncNotified: "",
     audioSrcBackup: "",
     songHasAlignableLyrics: false,
     imageUrl: "",
@@ -423,6 +423,7 @@ function loadVideo(url) {
         video.loop = true;
         video.muted = true;
         video.playsInline = true;
+        video.preload = "auto";
         video.onloadeddata = () => resolve(video);
         video.onerror = reject;
     });
@@ -472,48 +473,42 @@ function colorToHsl(color) {
     };
 }
 
-let huePaletteCache = { primary: "", secondary: "", primaryHsl: null, secondaryHsl: null };
-
-function huePalette() {
-    if (huePaletteCache.primary !== state.primaryColor || huePaletteCache.secondary !== state.secondaryColor) {
-        huePaletteCache = {
-            primary: state.primaryColor,
-            secondary: state.secondaryColor,
-            primaryHsl: colorToHsl(state.primaryColor),
-            secondaryHsl: colorToHsl(state.secondaryColor),
-        };
-    }
-    return huePaletteCache;
-}
-
 function interpolateHue(start, end, amount) {
     const delta = ((end - start + 540) % 360) - 180;
     return (start + delta * amount + 360) % 360;
 }
 
+const NEON_STOPS = [[188, 96, 56], [268, 88, 58], [328, 92, 58], [38, 96, 56]];
+const RAINBOW_STOPS = [[280, 95, 54], [0, 96, 54], [28, 98, 54], [52, 96, 54], [118, 90, 50], [178, 96, 52], [222, 96, 55]];
+const WARM_COOL_STOPS = [[24, 98, 56], [340, 88, 60], [300, 20, 94], [188, 92, 60], [214, 96, 54]];
+const EQ_HEX = ["#9b22ff", "#e018a8", "#ff1f2a", "#ff6a00", "#ffd000", "#6ee000", "#00e0ff", "#2458ff"];
+
+function mixHsl(t, stops, alpha = 0.92) {
+    const n = ((t % 1) + 1) % 1;
+    const scaled = n * (stops.length - 1);
+    const index = Math.min(stops.length - 2, Math.floor(scaled));
+    const f = scaled - index;
+    const a = stops[index];
+    const b = stops[index + 1];
+    return `hsla(${interpolateHue(a[0], b[0], f)}, ${a[1] + (b[1] - a[1]) * f}%, ${a[2] + (b[2] - a[2]) * f}%, ${alpha})`;
+}
+
 function hueColor(t, alpha = 0.92) {
-    const normalized = ((t % 1) + 1) % 1;
-    const { primaryHsl, secondaryHsl } = huePalette();
-    const delta = ((secondaryHsl.h - primaryHsl.h + 540) % 360) - 180;
-    const direction = delta < 0 ? -1 : 1;
-    // A derived midpoint bends the route through a third hue, so a two-color
-    // template becomes a small spectrum instead of alternating two literals.
-    const midpoint = (primaryHsl.h + delta * 0.5 + direction * 28 + 360) % 360;
-    const hue = normalized < 0.5
-        ? interpolateHue(primaryHsl.h, midpoint, normalized * 2)
-        : interpolateHue(midpoint, secondaryHsl.h, (normalized - 0.5) * 2);
-    const saturation = Math.max(58, Math.min(98, primaryHsl.s * (1 - normalized) + secondaryHsl.s * normalized + Math.sin(normalized * Math.PI) * 5));
-    const lightness = Math.max(48, Math.min(72, primaryHsl.l * (1 - normalized) + secondaryHsl.l * normalized + Math.sin(normalized * Math.PI) * 4));
-    return `hsla(${hue}, ${saturation}%, ${lightness}%, ${alpha})`;
+    return mixHsl(t, NEON_STOPS, alpha);
+}
+
+function rainbowColor(t, alpha = 0.92) {
+    return mixHsl(t, RAINBOW_STOPS, alpha);
 }
 
 function fullSpectrumColor(t, alpha = 0.92) {
-    const normalized = ((t % 1) + 1) % 1;
-    const { primaryHsl, secondaryHsl } = huePalette();
-    const anchor = interpolateHue(primaryHsl.h, secondaryHsl.h, 0.28);
-    const saturation = Math.max(72, Math.min(98, (primaryHsl.s + secondaryHsl.s) * 0.5 + 8));
-    const lightness = Math.max(52, Math.min(68, (primaryHsl.l + secondaryHsl.l) * 0.5 + 4));
-    return `hsla(${(anchor + normalized * 360) % 360}, ${saturation}%, ${lightness}%, ${alpha})`;
+    return rainbowColor(t, alpha);
+}
+
+function eqBandColor(t, alpha = 1) {
+    const n = ((t % 1) + 1) % 1;
+    const index = Math.min(EQ_HEX.length - 1, Math.floor(n * EQ_HEX.length));
+    return blendColor(alpha, EQ_HEX[index]);
 }
 
 function averageLevel(data) {
@@ -534,30 +529,28 @@ function drawBackground(width, height, energy) {
         ctx.drawImage(backgroundImage, 0, 0, width, height);
     } else {
         const gradient = ctx.createLinearGradient(0, 0, width, height);
-        gradient.addColorStop(0, hueColor(0, 0.9));
-        gradient.addColorStop(0.28, hueColor(0.25, 0.66));
-        gradient.addColorStop(0.5, "rgba(6, 10, 18, 0.96)");
-        gradient.addColorStop(0.72, hueColor(0.68, 0.66));
-        gradient.addColorStop(1, hueColor(0.99, 0.9));
+        gradient.addColorStop(0, state.sceneA);
+        gradient.addColorStop(1, state.sceneB);
         ctx.fillStyle = gradient;
         ctx.fillRect(0, 0, width, height);
     }
 
-    ctx.fillStyle = `rgba(5, 7, 12, ${state.backgroundDim})`;
-    ctx.fillRect(0, 0, width, height);
-
-    const highlight = ctx.createRadialGradient(
-        width * 0.72,
-        height * 0.18,
-        0,
-        width * 0.72,
-        height * 0.18,
-        width * 0.48,
-    );
-    highlight.addColorStop(0, hueColor(0.72, 0.16 + energy * 0.0005));
-    highlight.addColorStop(1, "rgba(0, 0, 0, 0)");
-    ctx.fillStyle = highlight;
-    ctx.fillRect(0, 0, width, height);
+    if (state.sceneKind !== "key") {
+        ctx.fillStyle = `rgba(5, 7, 12, ${state.backgroundDim})`;
+        ctx.fillRect(0, 0, width, height);
+        const highlight = ctx.createRadialGradient(
+            width * 0.72,
+            height * 0.18,
+            0,
+            width * 0.72,
+            height * 0.18,
+            width * 0.48,
+        );
+        highlight.addColorStop(0, hueColor(0.72, 0.16 + energy * 0.0005));
+        highlight.addColorStop(1, "rgba(0, 0, 0, 0)");
+        ctx.fillStyle = highlight;
+        ctx.fillRect(0, 0, width, height);
+    }
 }
 
 function drawCinematicAtmosphere(width, height, energy) {
@@ -573,13 +566,13 @@ function drawCinematicAtmosphere(width, height, energy) {
             x: width * (0.22 + Math.sin(drift) * 0.08),
             y: height * (0.26 + Math.cos(drift * 0.83) * 0.08),
             radius: span * (0.44 + beat * 0.08),
-            color: state.primaryColor,
+            color: hueColor(0.08, 1),
         },
         {
             x: width * (0.78 + Math.cos(drift * 0.72) * 0.08),
             y: height * (0.66 + Math.sin(drift * 0.91) * 0.06),
             radius: span * (0.5 + beat * 0.1),
-            color: state.secondaryColor,
+            color: hueColor(0.82, 1),
         },
         {
             x: width * (0.5 + Math.sin(drift * 0.55) * 0.05),
@@ -602,7 +595,7 @@ function drawCinematicAtmosphere(width, height, energy) {
     const horizonY = height * (state.aspectMode === "portrait" ? 0.62 : 0.72);
     const horizon = ctx.createLinearGradient(0, horizonY - span * 0.08, 0, horizonY + span * 0.12);
     horizon.addColorStop(0, "rgba(0, 0, 0, 0)");
-    horizon.addColorStop(0.5, blendColor(0.045 + beat * 0.035, state.secondaryColor));
+    horizon.addColorStop(0.5, hueColor(0.78, 0.045 + beat * 0.035));
     horizon.addColorStop(1, "rgba(0, 0, 0, 0)");
     ctx.fillStyle = horizon;
     ctx.fillRect(0, horizonY - span * 0.08, width, span * 0.2);
@@ -828,6 +821,34 @@ function drawBubble(drawCtx, x, y, size, wobble) {
     drawCtx.restore();
 }
 
+let noteSprites = null;
+
+function ensureNoteSprites() {
+    if (noteSprites) {
+        return noteSprites;
+    }
+    noteSprites = [];
+    for (let index = 0; index < 16; index += 1) {
+        const tile = document.createElement("canvas");
+        tile.width = 64;
+        tile.height = 64;
+        const brush = tile.getContext("2d");
+        drawMusicNote(brush, 32, 34, 18, 0, rainbowColor(index / 16, 0.92));
+        noteSprites.push(tile);
+    }
+    return noteSprites;
+}
+
+function drawCachedNote(x, y, size, rotation, index, alpha) {
+    const sprite = ensureNoteSprites()[index % 16];
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(rotation);
+    ctx.globalAlpha = Math.max(0.12, Math.min(1, alpha));
+    ctx.drawImage(sprite, -size, -size * 1.15, size * 2, size * 2.15);
+    ctx.restore();
+}
+
 function drawMusicNote(drawCtx, x, y, size, rotation, color) {
     drawCtx.save();
     drawCtx.translate(x, y);
@@ -944,7 +965,14 @@ function drawParticles(width, height, energy) {
             if (particle.y < -50 || particle.x < -40 || particle.x > width + 40) {
                 Object.assign(particle, createFxParticle("notes", width, height, false, particle.index));
             }
-            drawMusicNote(ctx, particle.x, particle.y, particle.size * (0.9 + energyBoost * 0.08), particle.rotation, particleColor(particle.alpha, index, true));
+            drawCachedNote(
+                particle.x,
+                particle.y,
+                particle.size * (0.9 + energyBoost * 0.08),
+                particle.rotation,
+                index,
+                particle.alpha,
+            );
         } else if (style === "bokeh") {
             particle.twinklePhase += particle.twinkleSpeed * delta;
             particle.x += particle.vx * delta;
@@ -1080,6 +1108,14 @@ function sampleBands(spectrum, count) {
     return bands;
 }
 
+function vizFloor(height) {
+    return height - (state.aspectMode === "portrait" ? 20 : 16);
+}
+
+function vizBottomRise(height, landscape = 0.24, portrait = 0.16) {
+    return height * (state.aspectMode === "portrait" ? portrait : landscape);
+}
+
 function sampleWave(waveform, count) {
     const out = new Array(count);
     const bucket = waveform.length / count;
@@ -1187,12 +1223,11 @@ function drawOrbitPreset(centerX, centerY, radius, spectrum) {
 }
 
 function drawBarsPreset(width, height, spectrum) {
-    const portrait = state.aspectMode === "portrait";
     const count = 48;
     const bands = sampleBands(spectrum, count);
     const barWidth = width / count;
-    const floor = height * (portrait ? 0.9 : 0.86);
-    const maxRise = height * (portrait ? 0.16 : 0.28);
+    const floor = vizFloor(height);
+    const maxRise = vizBottomRise(height, 0.28, 0.16);
     const gap = Math.max(3, barWidth * 0.3);
     ctx.save();
     ctx.globalCompositeOperation = "lighter";
@@ -1217,8 +1252,9 @@ function drawBarsPreset(width, height, spectrum) {
         fillRoundBar(x, y, w, barHeight, 6);
         ctx.fillStyle = blendColor(0.95, color);
         fillRoundBar(x, y - 3, w, Math.min(5, Math.max(2, w * 0.26)), 3, false);
-        ctx.globalAlpha = 0.28;
-        fillRoundBar(x, floor + 3, w, Math.max(6, barHeight * 0.38), 5, false);
+        ctx.globalAlpha = 0.22;
+        const bounce = Math.min(height - floor - 2, Math.max(4, barHeight * 0.22));
+        if (bounce > 2) fillRoundBar(x, floor + 2, w, bounce, 4, false);
         ctx.globalAlpha = 1;
     }
     ctx.restore();
@@ -1242,9 +1278,8 @@ function drawPulsePreset(centerX, centerY, radius, energy) {
 
 function drawWavePreset(width, height, waveform) {
     const samples = sampleWave(waveform, 144);
-    const portrait = state.aspectMode === "portrait";
-    const base = height * (portrait ? 0.84 : 0.8);
-    const amp = height * (portrait ? 0.1 : 0.14);
+    const base = vizFloor(height);
+    const amp = vizBottomRise(height, 0.14, 0.1);
     ctx.save();
     ctx.globalCompositeOperation = "lighter";
     const area = ctx.createLinearGradient(0, base - amp, 0, height);
@@ -1315,51 +1350,38 @@ function drawHaloPreset(centerX, centerY, radius, spectrum) {
     ctx.fill();
 }
 
-function drawAuroraPreset(width, height, spectrum) {
-    const bands = sampleBands(spectrum, 28);
-    const clock = vizClock();
-    const portrait = state.aspectMode === "portrait";
-    const layers = 4;
-    for (let layer = 0; layer < layers; layer += 1) {
-        const baseY = height * ((portrait ? 0.58 : 0.62) + layer * 0.055);
-        const amp = height * (0.045 + layer * 0.018);
-        ctx.beginPath();
-        ctx.moveTo(0, height);
-        for (let x = 0; x <= width; x += 10) {
-            const t = x / width;
-            const band = bands[Math.min(bands.length - 1, Math.floor(t * bands.length))];
-            const y = baseY
-                - band * amp * 2.4
-                - Math.sin(t * Math.PI * (2.4 + layer) + clock * (0.55 + layer * 0.22) + layer) * amp;
-            ctx.lineTo(x, y);
-        }
-        ctx.lineTo(width, height);
-        ctx.closePath();
-        ctx.fillStyle = hueColor(layer / layers + clock * 0.025, layer % 2 === 0 ? 0.2 : 0.18);
-        ctx.fill();
-    }
-}
-
 function drawSunburstPreset(centerX, centerY, radius, spectrum) {
-    const bands = sampleBands(spectrum, 48);
-    const inner = state.centerImage ? radius + 6 : 0;
-    const reach = state.centerImage
-        ? Math.min(centerX, centerY) * 0.92
-        : Math.hypot(centerX, centerY) * 0.92;
-    for (let index = 0; index < bands.length; index += 1) {
+    const rays = 120;
+    const bands = sampleBands(spectrum, rays);
+    const clock = vizClock();
+    const inner = state.centerImage ? radius + 10 : 16;
+    const maxLen = Math.min(centerX, centerY, elements.canvas.height * 0.42) * 0.88;
+    ctx.save();
+    ctx.globalCompositeOperation = "lighter";
+    ctx.lineCap = "round";
+    for (let index = 0; index < rays; index += 1) {
         const value = bands[index];
-        const a0 = (index / bands.length) * Math.PI * 2 - Math.PI / 2;
-        const a1 = ((index + 1) / bands.length) * Math.PI * 2 - Math.PI / 2;
-        const outer = inner + 36 + value * reach;
+        const angle = (index / rays) * Math.PI * 2 - Math.PI / 2 + clock * 0.05;
+        const len = inner + 18 + value * maxLen;
+        const x0 = centerX + Math.cos(angle) * inner;
+        const y0 = centerY + Math.sin(angle) * inner;
+        const x1 = centerX + Math.cos(angle) * len;
+        const y1 = centerY + Math.sin(angle) * len;
+        ctx.strokeStyle = hueColor(index / rays, 0.35 + value * 0.55);
+        ctx.shadowColor = ctx.strokeStyle;
+        ctx.shadowBlur = 10 + value * 16;
+        ctx.lineWidth = 1.1 + value * 2.8;
         ctx.beginPath();
-        ctx.moveTo(centerX + Math.cos(a0) * inner, centerY + Math.sin(a0) * inner);
-        ctx.lineTo(centerX + Math.cos(a0) * outer, centerY + Math.sin(a0) * outer);
-        ctx.lineTo(centerX + Math.cos(a1) * outer, centerY + Math.sin(a1) * outer);
-        ctx.lineTo(centerX + Math.cos(a1) * inner, centerY + Math.sin(a1) * inner);
-        ctx.closePath();
-        ctx.fillStyle = hueColor(index / bands.length, 0.16 + value * 0.5);
+        ctx.moveTo(x0, y0);
+        ctx.lineTo(x1, y1);
+        ctx.stroke();
+        ctx.fillStyle = "rgba(255,255,255,0.55)";
+        ctx.shadowBlur = 8;
+        ctx.beginPath();
+        ctx.arc(x1, y1, 1.2 + value * 2.4, 0, Math.PI * 2);
         ctx.fill();
     }
+    ctx.restore();
 }
 
 function drawGridPreset(width, height, spectrum) {
@@ -1367,8 +1389,8 @@ function drawGridPreset(width, height, spectrum) {
     const cols = 24;
     const rows = portrait ? 9 : 8;
     const gap = 5;
-    const bandH = height * (portrait ? 0.2 : 0.28);
-    const originY = height - bandH - 12;
+    const bandH = vizBottomRise(height, 0.28, 0.2);
+    const originY = vizFloor(height) - bandH;
     const cellW = (width - gap * (cols + 1)) / cols;
     const cellH = (bandH - gap * (rows + 1)) / rows;
     const bands = sampleBands(spectrum, cols);
@@ -1451,66 +1473,8 @@ function drawSplitPreset(width, height, spectrum) {
     drawWing(width - 16 - side, -1);
 }
 
-function drawSkylinePreset(width, height, spectrum) {
-    const bands = sampleBands(spectrum, 40);
-    const portrait = state.aspectMode === "portrait";
-    const horizon = height * (portrait ? 0.42 : 0.48);
-    const maxH = height * (portrait ? 0.22 : 0.28);
-    const barW = width / bands.length;
-    const gap = Math.max(2, barW * 0.22);
-    for (let index = 0; index < bands.length; index += 1) {
-        const t = index / Math.max(1, bands.length - 1);
-        const h = 10 + bands[index] * maxH;
-        const x = index * barW + gap / 2;
-        const w = Math.max(4, barW - gap);
-        const color = hueColor(t, 1);
-        const y = horizon - h;
-        const glow = ctx.createLinearGradient(0, y, 0, horizon);
-        glow.addColorStop(0, blendColor(1, color));
-        glow.addColorStop(1, blendColor(0.4, color));
-        ctx.fillStyle = blendColor(0.18, color);
-        fillRoundBar(x - 1, y - 5, w + 2, h + 6, 7);
-        ctx.fillStyle = glow;
-        fillRoundBar(x, y, w, h, 5);
-        ctx.globalAlpha = 0.32 * (0.35 + bands[index]);
-        fillRoundBar(x, horizon + 4, w, h * 0.55, 5, false);
-        ctx.globalAlpha = 1;
-    }
-}
-
-function drawFlowPreset(width, height, spectrum) {
-    const bands = sampleBands(spectrum, 20);
-    const clock = vizClock();
-    const portrait = state.aspectMode === "portrait";
-    const mid = height * (portrait ? 0.42 : 0.46);
-    ctx.save();
-    ctx.globalCompositeOperation = "lighter";
-    ctx.lineCap = "round";
-    ctx.lineJoin = "round";
-    for (let layer = 0; layer < 6; layer += 1) {
-        ctx.beginPath();
-        const amp = height * (0.045 + layer * 0.012);
-        ctx.lineWidth = 2.2 + layer * 0.35;
-        ctx.strokeStyle = hueColor(layer / 6 + clock * 0.03, layer % 2 === 0 ? 0.28 : 0.24);
-        for (let x = 0; x <= width; x += 8) {
-            const t = x / width;
-            const band = bands[Math.min(bands.length - 1, Math.floor(t * bands.length))];
-            const y = mid
-                + Math.sin(t * Math.PI * (2.2 + layer * 0.35) + clock * (0.7 + layer * 0.12) + layer)
-                    * (amp + band * amp * 2.2);
-            if (x === 0) {
-                ctx.moveTo(x, y);
-            } else {
-                ctx.lineTo(x, y);
-            }
-        }
-        ctx.stroke();
-    }
-    ctx.restore();
-}
-
 function lyricsAreCentered() {
-    return state.preset === "split" || state.preset === "skyline" || state.preset === "peak";
+    return state.preset === "split" || state.preset === "peak";
 }
 
 function drawScopePreset(width, height, waveform) {
@@ -1536,193 +1500,246 @@ function drawScopePreset(width, height, waveform) {
     ctx.stroke();
 }
 
-function drawRingsPreset(centerX, centerY, radius, spectrum) {
-    const bands = sampleBands(spectrum, 48);
+function drawMeshPreset(width, height, spectrum) {
+    const cols = 26;
+    const rows = 14;
+    const bands = sampleBands(spectrum, cols);
     const clock = vizClock();
-    const span = Math.min(elements.canvas.width, elements.canvas.height);
-    const inner = state.centerImage ? radius + 12 : 10;
+    const vanishX = width / 2;
+    const vanishY = height * 0.2;
+    const points = [];
+    for (let row = 0; row < rows; row += 1) {
+        const depth = 0.22 + (row / (rows - 1)) * 0.72;
+        const line = [];
+        for (let col = 0; col < cols; col += 1) {
+            const t = col / (cols - 1) - 0.5;
+            const x = vanishX + t * width * 0.98 * depth;
+            const floor = vanishY + height * 0.38 * depth;
+            const lift = (bands[col] * height * 0.14 + Math.sin(col * 0.55 + row * 0.4 + clock * 1.4) * 10) * (0.35 + depth);
+            line.push({ x, y: floor - lift });
+        }
+        points.push(line);
+    }
     ctx.save();
+    ctx.globalCompositeOperation = "lighter";
     ctx.lineJoin = "round";
     ctx.lineCap = "round";
-    ctx.globalCompositeOperation = "lighter";
-    for (let ring = 0; ring < 12; ring += 1) {
-        const base = inner + ring * span * 0.032;
-        ctx.beginPath();
-        ctx.lineWidth = 1.6 + (11 - ring) * 0.12;
-        ctx.strokeStyle = hueColor(ring / 12, 0.55);
-        for (let index = 0; index <= bands.length; index += 1) {
-            const band = bands[index % bands.length];
-            const angle = (index / bands.length) * Math.PI * 2 + clock * (0.05 + ring * 0.01) * (ring % 2 ? -1 : 1);
-            const r = base + band * span * 0.045;
-            const x = centerX + Math.cos(angle) * r;
-            const y = centerY + Math.sin(angle) * r;
-            if (index === 0) {
-                ctx.moveTo(x, y);
-            } else {
-                ctx.lineTo(x, y);
-            }
-        }
-        ctx.closePath();
-        ctx.stroke();
-    }
-    ctx.restore();
-}
-
-function drawMeshPreset(width, height, spectrum) {
-    const bands = sampleBands(spectrum, 28);
-    const clock = vizClock();
-    const portrait = state.aspectMode === "portrait";
-    const rows = portrait ? 16 : 18;
-    ctx.save();
-    ctx.globalCompositeOperation = "lighter";
-    ctx.lineCap = "round";
-    ctx.lineWidth = 1.7;
+    ctx.lineWidth = 1.35;
     for (let row = 0; row < rows; row += 1) {
-        const y0 = height * (0.18 + (row / (rows - 1)) * (portrait ? 0.42 : 0.52));
         ctx.beginPath();
-        ctx.strokeStyle = hueColor(row / rows, 0.38);
-        for (let x = 0; x <= width; x += 7) {
-            const t = x / width;
-            const band = bands[Math.min(bands.length - 1, Math.floor(t * bands.length))];
-            const y = y0
-                + Math.sin(t * Math.PI * 7.5 + clock * 0.85 + row * 0.32) * (10 + band * 42)
-                + Math.sin(t * Math.PI * 2.4 + row) * 7;
-            if (x === 0) {
-                ctx.moveTo(x, y);
-            } else {
-                ctx.lineTo(x, y);
-            }
+        ctx.strokeStyle = hueColor(row / rows, 0.28 + row / rows * 0.45);
+        points[row].forEach((point, index) => {
+            if (index === 0) ctx.moveTo(point.x, point.y);
+            else ctx.lineTo(point.x, point.y);
+        });
+        ctx.stroke();
+    }
+    for (let col = 0; col < cols; col += 1) {
+        ctx.beginPath();
+        ctx.strokeStyle = hueColor(col / cols, 0.22);
+        for (let row = 0; row < rows; row += 1) {
+            const point = points[row][col];
+            if (row === 0) ctx.moveTo(point.x, point.y);
+            else ctx.lineTo(point.x, point.y);
         }
         ctx.stroke();
     }
     ctx.restore();
-}
-
-function drawDiscPreset(centerX, centerY, radius, spectrum) {
-    const bands = sampleBands(spectrum, 72);
-    const span = Math.min(elements.canvas.width, elements.canvas.height);
-    const inner = state.centerImage ? radius + 8 : span * 0.07;
-    const reach = state.centerImage ? span * 0.22 : span * 0.38;
-    for (let index = 0; index < bands.length; index += 1) {
-        const a0 = (index / bands.length) * Math.PI * 2 - Math.PI / 2;
-        const a1 = ((index + 1) / bands.length) * Math.PI * 2 - Math.PI / 2;
-        const outer = inner + 12 + bands[index] * reach;
-        ctx.beginPath();
-        ctx.moveTo(centerX + Math.cos(a0) * inner, centerY + Math.sin(a0) * inner);
-        ctx.lineTo(centerX + Math.cos(a0) * outer, centerY + Math.sin(a0) * outer);
-        ctx.lineTo(centerX + Math.cos(a1) * outer, centerY + Math.sin(a1) * outer);
-        ctx.lineTo(centerX + Math.cos(a1) * inner, centerY + Math.sin(a1) * inner);
-        ctx.closePath();
-        ctx.fillStyle = fullSpectrumColor(index / bands.length, 0.72 + bands[index] * 0.22);
-        ctx.fill();
-    }
 }
 
 function drawPeakPreset(width, height, spectrum) {
-    const bands = sampleBands(spectrum, 56);
-    const portrait = state.aspectMode === "portrait";
-    const horizon = height * (portrait ? 0.44 : 0.5);
-    const maxH = height * (portrait ? 0.24 : 0.3);
+    const bands = sampleBands(spectrum, 64);
+    const floor = height;
+    const maxH = vizBottomRise(height, 0.24, 0.18);
     const rainbow = ctx.createLinearGradient(0, 0, width, 0);
-    rainbow.addColorStop(0, fullSpectrumColor(0, 0.95));
-    rainbow.addColorStop(0.2, fullSpectrumColor(0.2, 0.95));
-    rainbow.addColorStop(0.4, fullSpectrumColor(0.4, 0.95));
-    rainbow.addColorStop(0.6, fullSpectrumColor(0.6, 0.95));
-    rainbow.addColorStop(0.8, fullSpectrumColor(0.8, 0.95));
-    rainbow.addColorStop(1, fullSpectrumColor(0.99, 0.95));
-
+    rainbow.addColorStop(0, rainbowColor(0, 0.92));
+    rainbow.addColorStop(0.25, rainbowColor(0.25, 0.92));
+    rainbow.addColorStop(0.5, rainbowColor(0.5, 0.92));
+    rainbow.addColorStop(0.75, rainbowColor(0.75, 0.92));
+    rainbow.addColorStop(1, rainbowColor(0.99, 0.92));
     ctx.save();
-    ctx.globalCompositeOperation = "source-over";
-    for (let layer = 2; layer >= 0; layer -= 1) {
-        const offset = layer * height * 0.025;
-        const scale = 1 - layer * 0.16;
-        ctx.beginPath();
-        ctx.moveTo(0, height);
-        ctx.lineTo(0, horizon + offset);
-        for (let index = 0; index < bands.length; index += 1) {
-            const x = (index / (bands.length - 1)) * width;
-            const wave = bands[index] * maxH * scale;
-            const y = horizon + offset - (8 + wave);
-            ctx.lineTo(x, y);
-        }
-        ctx.lineTo(width, horizon + offset);
-        ctx.lineTo(width, height);
-        ctx.closePath();
-        ctx.fillStyle = layer === 0 ? rainbow : blendColor(0.12 + (2 - layer) * 0.06, layer % 2 ? state.secondaryColor : state.primaryColor);
-        ctx.shadowBlur = layer === 0 ? 18 : 7;
-        ctx.shadowColor = layer % 2 ? state.secondaryColor : state.primaryColor;
-        ctx.fill();
-    }
-
-    ctx.shadowBlur = 10;
-    ctx.lineWidth = Math.max(1.8, height * 0.0024);
-    ctx.strokeStyle = blendColor(0.9, "#f7fbff");
     ctx.beginPath();
+    ctx.moveTo(0, floor);
     for (let index = 0; index < bands.length; index += 1) {
         const x = (index / (bands.length - 1)) * width;
-        const y = horizon - (8 + bands[index] * maxH);
-        if (index === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+        ctx.lineTo(x, floor - 4 - bands[index] * maxH);
     }
-    ctx.stroke();
-
-    ctx.shadowBlur = 0;
-    ctx.save();
-    ctx.globalAlpha = 0.28;
-    ctx.beginPath();
-    ctx.moveTo(0, horizon);
-    for (let index = 0; index < bands.length; index += 1) {
-        const x = (index / (bands.length - 1)) * width;
-        const y = horizon + (8 + bands[index] * maxH * 0.55);
-        ctx.lineTo(x, y);
-    }
-    ctx.lineTo(width, horizon);
+    ctx.lineTo(width, floor);
     ctx.closePath();
     ctx.fillStyle = rainbow;
+    ctx.globalAlpha = 0.9;
     ctx.fill();
+    ctx.globalAlpha = 1;
+    ctx.shadowColor = "rgba(255,255,255,0.7)";
+    ctx.shadowBlur = 14;
+    ctx.strokeStyle = "rgba(255,255,255,0.85)";
+    ctx.lineWidth = Math.max(1.8, height * 0.0022);
+    ctx.beginPath();
+    for (let index = 0; index < bands.length; index += 1) {
+        const x = (index / (bands.length - 1)) * width;
+        const y = floor - 4 - bands[index] * maxH;
+        if (index === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+    ctx.restore();
+}
+
+function drawAnalogPreset(width, height, waveform) {
+    const cols = 96;
+    const samples = sampleWave(waveform, cols);
+    const mid = height * 0.5;
+    const amp = height * 0.28;
+    const colW = width / cols;
+    ctx.save();
+    for (let index = 0; index < cols; index += 1) {
+        const h = Math.max(colW * 0.6, Math.abs(samples[index]) * amp);
+        const x = index * colW;
+        const gradient = ctx.createLinearGradient(x, mid - h, x, mid + h);
+        gradient.addColorStop(0, rainbowColor(index / cols, 0.15));
+        gradient.addColorStop(0.5, rainbowColor(index / cols, 1));
+        gradient.addColorStop(1, rainbowColor(index / cols, 0.15));
+        ctx.fillStyle = gradient;
+        ctx.fillRect(x + colW * 0.12, mid - h, colW * 0.76, h * 2);
+    }
+    ctx.restore();
+}
+
+function drawEqPreset(width, height, spectrum) {
+    const cols = 32;
+    const rows = 16;
+    const bands = sampleBands(spectrum, cols);
+    const gap = Math.max(3, width * 0.005);
+    const barW = (width - gap * (cols + 1)) / cols;
+    const floor = vizFloor(height);
+    const stackH = vizBottomRise(height, 0.32, 0.22);
+    const barH = Math.max(6, (stackH - gap * (rows + 1)) / rows);
+    ctx.save();
+    for (let col = 0; col < cols; col += 1) {
+        const lit = Math.max(1, Math.round(bands[col] * rows));
+        const x = gap + col * (barW + gap);
+        const color = eqBandColor(col / cols, 1);
+        for (let row = 0; row < rows; row += 1) {
+            const y = floor - (row + 1) * (barH + gap);
+            ctx.fillStyle = row < lit ? color : "rgba(12, 12, 18, 0.55)";
+            ctx.fillRect(x, y, barW, barH);
+        }
+    }
+    ctx.restore();
+}
+
+function drawCascadePreset(width, height, spectrum) {
+    const count = 56;
+    const bands = sampleBands(spectrum, count);
+    const mid = height * 0.5;
+    const maxH = height * 0.38;
+    const barW = width / count;
+    ctx.save();
+    ctx.shadowBlur = 18;
+    for (let index = 0; index < count; index += 1) {
+        const h = 10 + bands[index] * maxH;
+        const x = index * barW + barW * 0.18;
+        const w = barW * 0.64;
+        const color = mixHsl(index / (count - 1), WARM_COOL_STOPS, 1);
+        ctx.shadowColor = color;
+        const gradient = ctx.createLinearGradient(x, mid - h, x, mid);
+        gradient.addColorStop(0, "rgba(255,255,255,0.95)");
+        gradient.addColorStop(0.18, color);
+        gradient.addColorStop(1, mixHsl(index / (count - 1), WARM_COOL_STOPS, 0.55));
+        ctx.fillStyle = gradient;
+        fillRoundBar(x, mid - h, w, h, Math.min(8, w * 0.45), true);
+        ctx.globalAlpha = 0.28;
+        ctx.shadowBlur = 0;
+        fillRoundBar(x, mid + 3, w, h * 0.9, Math.min(8, w * 0.45), false);
+        ctx.globalAlpha = 1;
+        ctx.shadowBlur = 18;
+    }
+    ctx.restore();
+}
+
+function drawStereoPreset(width, height, waveform) {
+    const cols = 140;
+    const samples = sampleWave(waveform, cols);
+    const mid = height * 0.5;
+    const amp = height * 0.32;
+    const colW = width / cols;
+    ctx.save();
+    ctx.globalCompositeOperation = "lighter";
+    for (let index = 0; index < cols; index += 1) {
+        const h = 6 + Math.abs(samples[index]) * amp;
+        const x = index * colW;
+        const color = rainbowColor(index / cols, 1);
+        ctx.fillStyle = color;
+        ctx.shadowColor = color;
+        ctx.shadowBlur = 10;
+        ctx.fillRect(x + colW * 0.2, mid - h, colW * 0.6, h * 2);
+    }
+    ctx.restore();
+}
+
+function drawSilkPreset(width, height, waveform) {
+    const energy = sampleWave(waveform, 32).reduce((sum, value) => sum + Math.abs(value), 0) / 32;
+    const mid = height * 0.42;
+    const clock = vizClock();
+    ctx.save();
+    ctx.globalCompositeOperation = "lighter";
+    ctx.lineJoin = "round";
+    ctx.lineCap = "round";
+    for (let layer = 0; layer < 14; layer += 1) {
+        const amp = height * (0.07 + energy * 0.18 + layer * 0.004);
+        ctx.beginPath();
+        for (let x = 0; x <= width; x += 4) {
+            const t = x / width;
+            const y = mid + Math.sin(t * Math.PI * 4 + clock * 1.4 + layer * 0.38) * amp
+                + Math.sin(t * Math.PI * 9 + layer) * amp * 0.18;
+            if (x === 0) ctx.moveTo(x, y);
+            else ctx.lineTo(x, y);
+        }
+        ctx.strokeStyle = rainbowColor(layer / 13, 0.55);
+        ctx.lineWidth = 1.7;
+        ctx.stroke();
+    }
+    ctx.save();
+    ctx.globalAlpha = 0.35;
+    ctx.translate(0, height * 0.52);
+    ctx.scale(1, -0.42);
+    ctx.translate(0, -mid);
+    for (let layer = 0; layer < 8; layer += 1) {
+        const amp = height * (0.07 + energy * 0.16);
+        ctx.beginPath();
+        for (let x = 0; x <= width; x += 5) {
+            const t = x / width;
+            const y = mid + Math.sin(t * Math.PI * 4 + clock * 1.4 + layer * 0.38) * amp;
+            if (x === 0) ctx.moveTo(x, y);
+            else ctx.lineTo(x, y);
+        }
+        ctx.strokeStyle = rainbowColor(layer / 7, 0.8);
+        ctx.stroke();
+    }
     ctx.restore();
     ctx.restore();
 }
 
-function drawSpiralPreset(centerX, centerY, radius, spectrum) {
-    const bands = sampleBands(spectrum, 140);
-    const clock = vizClock();
-    const span = Math.min(elements.canvas.width, elements.canvas.height);
-    const inner = state.centerImage ? radius + 6 : 6;
+function drawDotsPreset(width, height, waveform) {
+    const cols = 72;
+    const samples = sampleWave(waveform, cols);
+    const mid = height * 0.5;
+    const amp = height * 0.26;
     ctx.save();
-    ctx.lineCap = "round";
-    ctx.lineJoin = "round";
     ctx.globalCompositeOperation = "lighter";
-    ctx.lineWidth = Math.max(2.2, span * 0.0038);
-    ctx.beginPath();
-    for (let index = 0; index < bands.length; index += 1) {
-        const t = index / bands.length;
-        const angle = t * Math.PI * 12 + clock * 0.28;
-        const r = inner + t * span * 0.4 + bands[index] * span * 0.09;
-        const x = centerX + Math.cos(angle) * r;
-        const y = centerY + Math.sin(angle) * r;
-        if (index === 0) {
-            ctx.moveTo(x, y);
-        } else {
-            ctx.lineTo(x, y);
+    for (let col = 0; col < cols; col += 1) {
+        const x = ((col + 0.5) / cols) * width;
+        const h = Math.abs(samples[col]) * amp;
+        const dots = Math.max(3, Math.round(6 + h / 14));
+        for (let row = -dots; row <= dots; row += 1) {
+            const y = mid + row * 10;
+            const fall = 1 - Math.abs(row) / (dots + 0.01);
+            ctx.fillStyle = rainbowColor(col / cols, 0.25 + fall * 0.7);
+            ctx.beginPath();
+            ctx.arc(x, y, 2.4 + fall * 1.6, 0, Math.PI * 2);
+            ctx.fill();
         }
     }
-    ctx.strokeStyle = hueColor((clock * 0.08) % 1, 0.7);
-    ctx.stroke();
-    ctx.beginPath();
-    for (let index = 0; index < bands.length; index += 1) {
-        const t = index / bands.length;
-        const angle = t * Math.PI * 12 + Math.PI + clock * 0.28;
-        const r = inner + t * span * 0.36 + bands[index] * span * 0.07;
-        const x = centerX + Math.cos(angle) * r;
-        const y = centerY + Math.sin(angle) * r;
-        if (index === 0) {
-            ctx.moveTo(x, y);
-        } else {
-            ctx.lineTo(x, y);
-        }
-    }
-    ctx.strokeStyle = hueColor((clock * 0.08 + 0.45) % 1, 0.55);
-    ctx.stroke();
     ctx.restore();
 }
 
@@ -1858,7 +1875,7 @@ function drawInfoPanel(width, height) {
 
     if (summaryLines.length) {
         cursorY += 12;
-        ctx.fillStyle = blendColor(0.9, state.primaryColor);
+        ctx.fillStyle = hueColor(0.82, 0.9);
         ctx.font = `800 ${sectionSize}px "IBM Plex Mono"`;
         ctx.fillText("STYLE / SUMMARY", panelX + 18, cursorY);
         cursorY += 16;
@@ -1991,7 +2008,7 @@ function lyricWordColor(word, currentTime) {
         return "rgba(255,255,255,0.96)";
     }
     if (currentTime >= word.start) {
-        return blendColor(0.98, state.primaryColor);
+        return hueColor(0.88, 0.98);
     }
     return "rgba(255,255,255,0.42)";
 }
@@ -2147,11 +2164,19 @@ function drawScrollingLyrics(width, height, currentTime) {
     ctx.restore();
 }
 
-function renderVisualizer() {
+let lastDrawStamp = 0;
+
+function renderVisualizer(stamp) {
     renderFrame = window.requestAnimationFrame(renderVisualizer);
     if (state.audioSrcBackup) {
         return;
     }
+    const now = stamp || performance.now();
+    const minDelta = state.isRendering ? 32 : 14;
+    if (now - lastDrawStamp < minDelta) {
+        return;
+    }
+    lastDrawStamp = now;
     const width = elements.canvas.width;
     const height = elements.canvas.height;
 
@@ -2167,7 +2192,9 @@ function renderVisualizer() {
     ctx.clearRect(0, 0, width, height);
     drawBackground(width, height, energy);
     drawParticles(width, height, energy);
-    drawCinematicAtmosphere(width, height, energy);
+    if (state.backgroundMode === "random") {
+        drawCinematicAtmosphere(width, height, energy);
+    }
 
     const cover = visualCenter(width, height);
     const { x: centerX, y: centerY, radius } = vizFocus(width, height);
@@ -2182,8 +2209,6 @@ function renderVisualizer() {
         drawWavePreset(width, height, waveformData);
     } else if (state.preset === "halo") {
         drawHaloPreset(centerX, centerY, radius, frequencyData);
-    } else if (state.preset === "aurora") {
-        drawAuroraPreset(width, height, frequencyData);
     } else if (state.preset === "sunburst") {
         drawSunburstPreset(centerX, centerY, radius, frequencyData);
     } else if (state.preset === "grid") {
@@ -2192,22 +2217,24 @@ function renderVisualizer() {
         drawTunnelPreset(centerX, centerY, radius, energy, frequencyData);
     } else if (state.preset === "split") {
         drawSplitPreset(width, height, frequencyData);
-    } else if (state.preset === "skyline") {
-        drawSkylinePreset(width, height, frequencyData);
-    } else if (state.preset === "flow") {
-        drawFlowPreset(width, height, frequencyData);
     } else if (state.preset === "scope") {
         drawScopePreset(width, height, waveformData);
-    } else if (state.preset === "rings") {
-        drawRingsPreset(centerX, centerY, radius, frequencyData);
     } else if (state.preset === "mesh") {
         drawMeshPreset(width, height, frequencyData);
-    } else if (state.preset === "disc") {
-        drawDiscPreset(centerX, centerY, radius, frequencyData);
     } else if (state.preset === "peak") {
         drawPeakPreset(width, height, frequencyData);
-    } else if (state.preset === "spiral") {
-        drawSpiralPreset(centerX, centerY, radius, frequencyData);
+    } else if (state.preset === "analog") {
+        drawAnalogPreset(width, height, waveformData);
+    } else if (state.preset === "eq") {
+        drawEqPreset(width, height, frequencyData);
+    } else if (state.preset === "cascade") {
+        drawCascadePreset(width, height, frequencyData);
+    } else if (state.preset === "stereo") {
+        drawStereoPreset(width, height, waveformData);
+    } else if (state.preset === "silk") {
+        drawSilkPreset(width, height, waveformData);
+    } else if (state.preset === "dots") {
+        drawDotsPreset(width, height, waveformData);
     } else {
         drawArcPreset(centerX, centerY, radius, frequencyData);
     }
@@ -2311,6 +2338,11 @@ async function renderMp4() {
     elements.audio.addEventListener("timeupdate", showProgress);
 
     try {
+        try {
+            await fetch("/api/video/prepare", { method: "POST" });
+        } catch {
+            /* YuE2 unload is best-effort; capture still proceeds. */
+        }
         await ensureAudioGraph();
         const canvasStream = elements.canvas.captureStream(30);
         const audioStream = capture.call(elements.audio);
@@ -2539,7 +2571,10 @@ async function applyLyricsJobSnapshot(job, blocker = null) {
         state.lyricsSyncJobId = job.id;
     }
     if (job.status === "succeeded") {
-        notifyParent("codex-song-studio-refresh-library", { songId });
+        if (state.lyricsSyncNotified !== job.id) {
+            state.lyricsSyncNotified = job.id;
+            notifyParent("codex-song-studio-refresh-library", { songId });
+        }
         const timedLyricsUrl = `/api/library/${encodeURIComponent(songId)}/timed-lyrics`;
         const loaded = await loadTimedLyrics(timedLyricsUrl);
         finishLyricsSyncBusy();
@@ -2803,10 +2838,9 @@ document.querySelectorAll("[data-particle]").forEach((button) => {
 
 document.querySelectorAll(".swatch").forEach((button) => {
     button.addEventListener("click", () => {
-        state.primaryColor = button.dataset.primary || state.primaryColor;
-        state.secondaryColor = button.dataset.secondary || state.secondaryColor;
-        elements.primaryColor.value = state.primaryColor;
-        elements.secondaryColor.value = state.secondaryColor;
+        state.sceneA = button.dataset.a || state.sceneA;
+        state.sceneB = button.dataset.b || state.sceneB;
+        state.sceneKind = button.dataset.kind || "wash";
         document.querySelectorAll(".swatch").forEach((item) => item.classList.remove("active"));
         button.classList.add("active");
     });
@@ -2869,12 +2903,6 @@ elements.videoInput.addEventListener("change", async (event) => {
 elements.bgDim.addEventListener("input", () => {
     state.backgroundDim = Number(elements.bgDim.value) / 100;
 });
-elements.primaryColor.addEventListener("input", () => {
-    state.primaryColor = elements.primaryColor.value;
-});
-elements.secondaryColor.addEventListener("input", () => {
-    state.secondaryColor = elements.secondaryColor.value;
-});
 elements.particleCount.addEventListener("input", () => {
     state.particleCount = Number(elements.particleCount.value);
     particleCache.count = -1;
@@ -2909,7 +2937,11 @@ elements.volume.addEventListener("input", () => {
 });
 elements.seek.addEventListener("input", () => {
     if (Number.isFinite(elements.audio.duration) && elements.audio.duration > 0) {
-        elements.audio.currentTime = (Number(elements.seek.value) / 100) * elements.audio.duration;
+        const nextTime = (Number(elements.seek.value) / 100) * elements.audio.duration;
+        elements.audio.currentTime = nextTime;
+        if (backgroundVideo && Number.isFinite(backgroundVideo.duration) && backgroundVideo.duration > 0) {
+            backgroundVideo.currentTime = nextTime % backgroundVideo.duration;
+        }
     }
 });
 elements.downloadFrame.addEventListener("click", downloadCanvasFrame);
@@ -2926,11 +2958,17 @@ if (elements.renderCancel) {
 elements.audio.addEventListener("play", () => {
     elements.playToggle.textContent = "Pause";
     setStatus(elements.loadStatus, "Playing preview.");
+    if (backgroundVideo && state.backgroundMode === "video") {
+        backgroundVideo.play().catch(() => {});
+    }
 });
 elements.audio.addEventListener("pause", () => {
     elements.playToggle.textContent = "Play";
     if (!state.isRendering) {
         setStatus(elements.loadStatus, "Preview paused.");
+        if (backgroundVideo) {
+            backgroundVideo.pause();
+        }
     }
 });
 elements.audio.addEventListener("loadedmetadata", () => {
@@ -2943,9 +2981,6 @@ elements.audio.addEventListener("timeupdate", () => {
         elements.seek.value = String((elements.audio.currentTime / elements.audio.duration) * 100);
     } else {
         elements.seek.value = "0";
-    }
-    if (backgroundVideo && backgroundVideo.readyState >= 2 && Number.isFinite(backgroundVideo.duration) && backgroundVideo.duration > 0) {
-        backgroundVideo.currentTime = elements.audio.currentTime % backgroundVideo.duration;
     }
 });
 elements.audio.addEventListener("ended", () => {

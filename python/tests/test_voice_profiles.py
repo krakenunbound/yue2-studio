@@ -76,17 +76,34 @@ class VoiceProfileTests(unittest.TestCase):
         self.assertIn("Singer B (Male)", compiled["block"])
         self.assertTrue(any("Duet" in note for note in compiled["assignments"]))
 
-    def test_apply_replaces_vocal_details_only(self) -> None:
+    def test_apply_appends_compact_voice_phrase(self) -> None:
         description = (
             "Global Metadata\nBasic Attributes: folk.\n\n"
             "Vocal Details\nVocal Gender & Timbre: leftover template singer.\n\n"
             "Arrangement\nInstrument Lifecycle: lyre."
         )
-        result = voice_profiles.apply_vocal_block(description, "Vocal Gender & Timbre: Singer A (Female), a clear alto.")
-        self.assertIn("Basic Attributes: folk.", result)
-        self.assertIn("Instrument Lifecycle: lyre.", result)
-        self.assertIn("Singer A (Female), a clear alto.", result)
+        result = voice_profiles.apply_vocal_block(description, "Singer A (Female), a clear alto")
+        self.assertIn("folk", result)
+        self.assertIn("lyre", result)
+        self.assertIn("Singer A (Female), a clear alto", result)
         self.assertNotIn("leftover template singer", result)
+        self.assertNotIn("Vocal Details", result)
+        self.assertNotIn("Global Metadata", result)
+
+    def test_compile_preview_is_compact_yue2_style(self) -> None:
+        female = voice_profiles.get_profile("voice-clear-alto")
+        assert female is not None
+        result = voice_profiles.compile_for_generation(
+            "Global Metadata\nBasic Attributes: English, cinematic alternative rock.\n\nVocal Details\nleftover.\n\nArrangement\nInstrument Lifecycle: live guitars.",
+            {"female": female["id"], "male": "", "backing": ""},
+        )
+        self.assertTrue(result["applied"])
+        self.assertNotIn("Vocal Gender & Timbre", result["preview"])
+        self.assertNotIn("Vocal Details", result["preview"])
+        self.assertNotIn("Global Metadata", result["preview"])
+        self.assertIn("Singer A (Female)", result["preview"])
+        self.assertIn("cinematic alternative rock", result["preview"])
+        self.assertIn("live guitars", result["preview"])
 
     def test_instrumental_caption_strips_singer_block(self) -> None:
         description = (
@@ -95,14 +112,16 @@ class VoiceProfileTests(unittest.TestCase):
             "Arrangement\nInstrument Lifecycle: analog synths."
         )
         result = voice_profiles.apply_instrumental_caption(description)
-        self.assertIn("Fully instrumental", result)
+        self.assertIn("instrumental", result.casefold())
+        self.assertIn("no vocals", result.casefold())
         self.assertNotIn("Singer A (Female), a clear alto", result)
         self.assertIn("analog synths", result)
+        self.assertNotIn("Vocal Details", result)
 
     def test_plain_genre_stays_short(self) -> None:
         result = voice_profiles.apply_instrumental_caption("Cyberpunk")
         self.assertIn("Cyberpunk", result)
-        self.assertIn("Fully instrumental", result)
+        self.assertIn("instrumental", result.casefold())
         self.assertNotIn("Use a natural tempo", result)
         self.assertNotIn("Global Emotional Progression", result)
         self.assertLess(len(result), 400)
@@ -131,9 +150,13 @@ class VoiceProfileTests(unittest.TestCase):
         with patch.object(main.yue2_engine, "count_prompt_tokens", return_value={"tokens": 10, "maximum": 24576}):
             prepared = main.prepare_generation_params(params)
         self.assertEqual(params["description"], prepared["description"])
-        self.assertEqual(params["description"], prepared["generation_description"])
+        self.assertNotIn("Global Metadata", prepared["generation_description"])
+        self.assertIn("folk", prepared["generation_description"])
+        self.assertEqual("[Verse]\nHello\nOnly her", prepared["rendered_lyrics"])
+        self.assertIn("Singer A (Female)", prepared["generation_description"])
+        self.assertNotIn("Vocal Gender & Timbre", prepared["generation_description"])
         self.assertEqual("voice-clear-alto", prepared["voice_slots"]["female"])
-        self.assertEqual([], prepared["voice_snapshots"])
+        self.assertEqual("voice-clear-alto", prepared["voice_snapshots"][0]["id"])
 
     def test_instrumental_prepare_rewrites_vocal_details(self) -> None:
         import main
@@ -151,7 +174,9 @@ class VoiceProfileTests(unittest.TestCase):
         self.assertIn("[Intro]", prepared["rendered_lyrics"])
         self.assertGreaterEqual(prepared["rendered_lyrics"].count("(instrumental)"), 5)
         self.assertIn("no vocables", prepared["generation_description"])
-        self.assertIn("Synths.", prepared["generation_description"])
+        self.assertIn("Synths", prepared["generation_description"])
+        self.assertNotIn("Singer A (Female)", prepared["generation_description"])
+        self.assertNotIn("Vocal Details", prepared["generation_description"])
         self.assertEqual(params["voice_slots"], prepared["voice_slots"])
 
 

@@ -171,9 +171,13 @@ def _lyrics_for_generation(request: dict) -> str:
 
 
 def _request_payload(request: dict, output: Path) -> dict:
+    cot = str(request.get("cot_mode", "full"))
+    cfg = float(request.get("cfg", 1.0))
+    if cot == "off" and abs(cfg - 1.0) < 1e-9:
+        cfg = 1.01
     payload = {"style": str(request.get("generation_description", request["description"])), "lyrics": _lyrics_for_generation(request),
-               "cot": str(request.get("cot_mode", "full")), "abc": request.get("abc_score") or None,
-               "seed": int(request["seed"]), "cfg_scale": float(request.get("cfg", 1.0)),
+               "cot": cot, "abc": request.get("abc_score") or None,
+               "seed": int(request["seed"]), "cfg_scale": cfg,
                "steps": int(request.get("steps", 32)), "temperature": float(request.get("temperature", 1.0)),
                "top_k": int(request.get("top_k", 100)), "output": str(output)}
     if payload["cot"] not in {"full", "melody", "off"}: raise ValueError("cot_mode must be full, melody, or off")

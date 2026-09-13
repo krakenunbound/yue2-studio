@@ -20,6 +20,27 @@ import stable_sfx_worker
 
 
 class StudioTest(TestCase):
+    def test_library_prefers_saved_score_abc_for_remix(self) -> None:
+        from tempfile import TemporaryDirectory
+        with TemporaryDirectory() as temp:
+            root = Path(temp)
+            song = root / "remix-source"
+            song.mkdir()
+            (song / "song.wav").write_bytes(b"RIFF" + b"audio" * 80)
+            (song / "song.json").write_text(json.dumps({
+                "id": "remix-source", "title": "Night Drive", "description": "city pop",
+                "abc_score": "X:1\nK:C\nC D E", "created_at": "2026-09-13 12:00:00",
+            }), encoding="utf-8")
+            (song / "score.abc").write_text('X:1\nK:C\n"Am" A2 B2 |"G" G2 F2\n', encoding="utf-8")
+            planned = (song / "score.abc").read_text(encoding="utf-8").strip()
+            with patch.object(main, "LIBRARY_ROOT", root):
+                items = main.library()
+                score = main.song_planned_score("remix-source")
+        self.assertEqual(1, len(items))
+        self.assertTrue(items[0]["has_score"])
+        self.assertNotEqual(planned, items[0].get("abc_score"))
+        self.assertEqual(planned, score["abc"])
+
     def test_stable_sfx_worker_forces_prompt_encoder_to_local_folder(self) -> None:
         config = {"model": {"conditioning": {"configs": [{"type": "t5gemma", "config": {"repo_id": "remote/model", "subfolder": "remote-folder"}}]}}}
         localized = stable_sfx_worker.localize_model_config(config, Path("C:/local/sfx"))
@@ -208,13 +229,18 @@ class StudioTest(TestCase):
 
     def test_extracted_stage_directions_are_caption_instructions(self) -> None:
         caption = main.music3_caption("Nordic ritual folk.", ["Chorus: female opens into a rising hook"])
-        self.assertIn("production instructions only", caption)
-        self.assertIn("never sing, speak, or recite", caption)
+        self.assertIn("Nordic ritual folk", caption)
+        self.assertIn("style, not lyrics", caption)
+        self.assertNotIn("Global Metadata", caption)
 
-    def test_extracted_directions_live_inside_vocal_details(self) -> None:
+    def test_extracted_directions_append_to_compact_style(self) -> None:
         description = "Global Metadata\nBasic Attributes: Nordic folk.\n\nVocal Details\nVocal Gender & Timbre: Singer A (Female).\n\nArrangement\nInstrument Lifecycle: bowed lyre."
         caption = main.music3_caption(description, ["Bridge: Singer B answers Singer A"])
-        self.assertLess(caption.index("Section Performance and Singer Assignments"), caption.index("Arrangement"))
+        self.assertIn("Nordic folk", caption)
+        self.assertIn("bowed lyre", caption)
+        self.assertIn("Bridge: Singer B answers Singer A", caption)
+        self.assertNotIn("Global Metadata", caption)
+        self.assertNotIn("Vocal Details", caption)
 
     def test_cancel_only_signals_yue2_engine_for_music_jobs(self) -> None:
         from fastapi.testclient import TestClient
@@ -612,10 +638,13 @@ class StudioTest(TestCase):
         self.assertEqual("full", cot_mode)
         self.assertIsNone(abc_score)
         self.assertIn("“through”", caption)
-        self.assertIn("–", lyrics)
+        self.assertIn("close", caption)
+        self.assertIn("[Verse]", lyrics)
         self.assertIn("We’ll go", lyrics)
+        self.assertNotIn("[Verse –", lyrics)
         self.assertIn("“through”", prepared["description"])
         self.assertIn("We’ll", prepared["lyrics"])
+        self.assertIn("–", prepared["lyrics"])
 
     def test_yue2_worker_pipes_are_forced_to_utf8_on_windows(self) -> None:
         environment = main.yue2_engine._env()
@@ -913,12 +942,18 @@ class StudioTest(TestCase):
         route_paths = {route.path for route in main.app.routes}
         self.assertIn("/video-studio", route_paths)
         self.assertIn("/api/video/render", route_paths)
+        self.assertIn("/api/video/prepare", route_paths)
         script = (main.VIDEO_STUDIO_ROOT / "video_studio.js").read_text(encoding="utf-8")
         page = (main.VIDEO_STUDIO_ROOT / "index.html").read_text(encoding="utf-8")
         app = (PYTHON_ROOT.parent / "src" / "App.tsx").read_text(encoding="utf-8")
         self.assertIn("yue2-video-studio-job", app)
         self.assertIn("videoStudioFrame", app)
         self.assertIn("/api/video/render", script)
+        self.assertIn("/api/video/prepare", script)
+        self.assertIn("ensureNoteSprites", script)
+        self.assertIn("drawCachedNote", script)
+        self.assertNotIn("backgroundVideo.currentTime = elements.audio.currentTime", script)
+        self.assertIn("state.isRendering ? 32 : 14", script)
         self.assertIn("/api/library/${encodeURIComponent(songId)}/lyrics-sync", script)
         self.assertIn("yue2-video-studio-job", script)
         self.assertIn("releaseAudioForSync", script)
@@ -947,26 +982,46 @@ class StudioTest(TestCase):
         self.assertIn('data-preset="sunburst"', page)
         self.assertIn('data-preset="arc"', page)
         self.assertIn('data-preset="split"', page)
-        self.assertIn('data-preset="skyline"', page)
-        self.assertIn('data-preset="flow"', page)
         self.assertIn("drawSplitPreset", script)
-        self.assertIn("drawSkylinePreset", script)
-        self.assertIn("drawFlowPreset", script)
         self.assertIn("lyricsAreCentered", script)
         self.assertIn('data-preset="scope"', page)
-        self.assertIn('data-preset="rings"', page)
         self.assertIn('data-preset="mesh"', page)
-        self.assertIn('data-preset="disc"', page)
         self.assertIn('data-preset="peak"', page)
-        self.assertIn('data-preset="spiral"', page)
         self.assertIn("drawScopePreset", script)
-        self.assertIn("drawRingsPreset", script)
         self.assertIn("drawMeshPreset", script)
-        self.assertIn("drawDiscPreset", script)
         self.assertIn("drawPeakPreset", script)
-        self.assertIn("drawSpiralPreset", script)
+        self.assertIn("function vizFloor", script)
+        self.assertIn("vizBottomRise", script)
         self.assertIn('data-preset="halo"', page)
-        self.assertIn('data-preset="aurora"', page)
+        self.assertIn('data-preset="analog"', page)
+        self.assertIn('data-preset="eq"', page)
+        self.assertIn('data-preset="cascade"', page)
+        self.assertIn('data-preset="stereo"', page)
+        self.assertIn('data-preset="silk"', page)
+        self.assertIn('data-preset="dots"', page)
+        self.assertIn("rainbowColor", script)
+        self.assertIn("eqBandColor", script)
+        self.assertIn("WARM_COOL_STOPS", script)
+        self.assertNotIn('data-preset="aurora"', page)
+        self.assertNotIn('data-preset="skyline"', page)
+        self.assertNotIn('data-preset="flow"', page)
+        self.assertNotIn('data-preset="rings"', page)
+        self.assertNotIn('data-preset="spiral"', page)
+        self.assertNotIn('data-preset="helix"', page)
+        self.assertNotIn('data-preset="vista"', page)
+        self.assertNotIn('data-preset="contour"', page)
+        self.assertNotIn('data-preset="disc"', page)
+        self.assertNotIn('data-preset="ribbon"', page)
+        self.assertNotIn("drawDiscPreset", script)
+        self.assertNotIn("drawRibbonPreset", script)
+        self.assertNotIn("drawAuroraPreset", script)
+        self.assertNotIn("drawHelixPreset", script)
+        self.assertNotIn("drawVistaPreset", script)
+        self.assertIn('data-scene="chroma-green"', page)
+        self.assertIn('data-scene="chroma-blue"', page)
+        self.assertIn('data-scene="black"', page)
+        self.assertNotIn('id="primary-color"', page)
+        self.assertNotIn('id="secondary-color"', page)
         self.assertNotIn('data-preset="spectrum"', page)
         self.assertNotIn('data-preset="ring"', page)
         self.assertNotIn('data-preset="mirror"', page)
@@ -983,7 +1038,7 @@ class StudioTest(TestCase):
         self.assertNotIn("particle.life -= 0.0022", script)
         self.assertIn("Fade by height, not a short timer.", script)
         self.assertNotIn("height - 80 - barHeight", script)
-        self.assertIn("height * (portrait ? 0.16 : 0.28)", script)
+        self.assertIn("vizBottomRise(height, 0.28, 0.16)", script)
         self.assertIn("lastStartedLyricIndex", script)
         self.assertNotRegex(script, r"if \(currentIndex < 0\) \{\s*return 0;")
 

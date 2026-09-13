@@ -71,6 +71,7 @@ class JobManager:
             "stems": "Queued stem extraction job %s",
             "audio_export": "Queued audio export job %s",
             "lyrics_sync": "Queued lyric sync job %s",
+            "sheetsage": "Queued SheetSage2 transcription job %s",
         }.get(kind, "Queued job %s")
         log.info(queued, job.id[:8])
         return job

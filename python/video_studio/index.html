@@ -56,20 +56,20 @@
                     <button class="preset" data-preset="pulse" type="button">Pulse</button>
                     <button class="preset" data-preset="wave" type="button">Wave</button>
                     <button class="preset" data-preset="halo" type="button">Halo</button>
-                    <button class="preset" data-preset="aurora" type="button">Aurora</button>
                     <button class="preset" data-preset="sunburst" type="button">Sunburst</button>
                     <button class="preset" data-preset="grid" type="button">Grid</button>
                     <button class="preset" data-preset="tunnel" type="button">Tunnel</button>
                     <button class="preset" data-preset="arc" type="button">Arc</button>
                     <button class="preset" data-preset="split" type="button">Split</button>
-                    <button class="preset" data-preset="skyline" type="button">Skyline</button>
-                    <button class="preset" data-preset="flow" type="button">Flow</button>
                     <button class="preset" data-preset="scope" type="button">Scope</button>
-                    <button class="preset" data-preset="rings" type="button">Rings</button>
                     <button class="preset" data-preset="mesh" type="button">Mesh</button>
-                    <button class="preset" data-preset="disc" type="button">Disc</button>
                     <button class="preset" data-preset="peak" type="button">Peak</button>
-                    <button class="preset" data-preset="spiral" type="button">Spiral</button>
+                    <button class="preset" data-preset="analog" type="button">Analog</button>
+                    <button class="preset" data-preset="eq" type="button">Equalizer</button>
+                    <button class="preset" data-preset="cascade" type="button">Cascade</button>
+                    <button class="preset" data-preset="stereo" type="button">Stereo</button>
+                    <button class="preset" data-preset="silk" type="button">Silk</button>
+                    <button class="preset" data-preset="dots" type="button">Dots</button>
                 </div>
             </section>
 
@@ -91,25 +91,22 @@
             </section>
 
             <section class="card">
-                <div class="card-title">Color</div>
+                <div class="card-title">Scene</div>
                 <div class="swatch-grid">
-                    <button class="swatch active" data-primary="#a855f7" data-secondary="#22d3ee" style="--swatch-a:#a855f7; --swatch-b:#22d3ee;" type="button"></button>
-                    <button class="swatch" data-primary="#ff8a20" data-secondary="#ff4d95" style="--swatch-a:#ff8a20; --swatch-b:#ff4d95;" type="button"></button>
-                    <button class="swatch" data-primary="#38bdf8" data-secondary="#6366f1" style="--swatch-a:#38bdf8; --swatch-b:#6366f1;" type="button"></button>
-                    <button class="swatch" data-primary="#facc15" data-secondary="#fb7185" style="--swatch-a:#facc15; --swatch-b:#fb7185;" type="button"></button>
-                    <button class="swatch" data-primary="#a855f7" data-secondary="#ec4899" style="--swatch-a:#a855f7; --swatch-b:#ec4899;" type="button"></button>
-                    <button class="swatch" data-primary="#e5e7eb" data-secondary="#94a3b8" style="--swatch-a:#e5e7eb; --swatch-b:#94a3b8;" type="button"></button>
+                    <button class="swatch active" data-scene="black" data-kind="solid" data-a="#000000" data-b="#000000" title="Black" style="--swatch-a:#000000; --swatch-b:#111111;" type="button"></button>
+                    <button class="swatch" data-scene="white" data-kind="solid" data-a="#ffffff" data-b="#ffffff" title="White" style="--swatch-a:#ffffff; --swatch-b:#e8e8e8;" type="button"></button>
+                    <button class="swatch" data-scene="gray" data-kind="solid" data-a="#b0b0b0" data-b="#1a1a1a" title="Grayscale" style="--swatch-a:#f2f2f2; --swatch-b:#111111;" type="button"></button>
+                    <button class="swatch" data-scene="chroma-green" data-kind="key" data-a="#00ff00" data-b="#00ff00" title="Chroma green" style="--swatch-a:#00ff00; --swatch-b:#00c800;" type="button"></button>
+                    <button class="swatch" data-scene="chroma-blue" data-kind="key" data-a="#0047ff" data-b="#0047ff" title="Chroma blue" style="--swatch-a:#0047ff; --swatch-b:#0033cc;" type="button"></button>
+                    <button class="swatch" data-scene="chroma-magenta" data-kind="key" data-a="#ff00ff" data-b="#ff00ff" title="Chroma magenta" style="--swatch-a:#ff00ff; --swatch-b:#cc00cc;" type="button"></button>
+                    <button class="swatch" data-scene="navy" data-kind="wash" data-a="#020617" data-b="#0f172a" title="Navy" style="--swatch-a:#1e3a8a; --swatch-b:#020617;" type="button"></button>
+                    <button class="swatch" data-scene="dusk" data-kind="wash" data-a="#3b0764" data-b="#0c4a6e" title="Dusk" style="--swatch-a:#a855f7; --swatch-b:#22d3ee;" type="button"></button>
+                    <button class="swatch" data-scene="sunset" data-kind="wash" data-a="#7c2d12" data-b="#9d174d" title="Sunset" style="--swatch-a:#ff8a20; --swatch-b:#ff4d95;" type="button"></button>
+                    <button class="swatch" data-scene="sky" data-kind="wash" data-a="#0c4a6e" data-b="#312e81" title="Sky" style="--swatch-a:#38bdf8; --swatch-b:#6366f1;" type="button"></button>
+                    <button class="swatch" data-scene="ember" data-kind="wash" data-a="#78350f" data-b="#9f1239" title="Ember" style="--swatch-a:#facc15; --swatch-b:#fb7185;" type="button"></button>
+                    <button class="swatch" data-scene="orchid" data-kind="wash" data-a="#4c1d95" data-b="#9d174d" title="Orchid" style="--swatch-a:#a855f7; --swatch-b:#ec4899;" type="button"></button>
                 </div>
-                <div class="field-row">
-                    <label class="color-field">
-                        <span>Primary</span>
-                        <input id="primary-color" type="color" value="#a855f7">
-                    </label>
-                    <label class="color-field">
-                        <span>Secondary</span>
-                        <input id="secondary-color" type="color" value="#22d3ee">
-                    </label>
-                </div>
+                <div class="status">Scene color is the backdrop only. Visualizers stay on a fixed rainbow spectrum.</div>
             </section>
 
             <section class="card">

@@ -49,8 +49,13 @@ def run(request: dict) -> None:
                      seed=int(request["seed"]), cfg_scale=float(request["cfg_scale"]), cancelled=cancelled)
     if plan.abc:
         Path(request["output"]).with_name("score.abc").write_text(plan.abc, encoding="utf-8")
+    truncated = {
+        "abc": bool(getattr(plan, "truncated", False)),
+        "semantic": False,
+    }
     emit("YUE2_PROGRESS", {"progress": .30, "message": "Generating semantic music tokens"})
     semantic = pipe.generate_semantic(plan, sampling=semantic_sampling, cancelled=cancelled)
+    truncated["semantic"] = bool(getattr(semantic, "truncated", False))
     # Keep exact inputs for a local synthesis replay if the worker fails.
     # Recovery data contains song text, never the cloud API-key vault.
     import numpy as np
@@ -81,7 +86,14 @@ def run(request: dict) -> None:
     # inspect_wav and the export pipeline use Python's stdlib wave reader,
     # which supports PCM WAV but not IEEE float WAV.
     sf.write(path, audio, 48000, subtype="PCM_24")
-    emit("YUE2_PROGRESS", {"progress": 1., "message": "Song ready"})
+    (path.with_name("result.json")).write_text(
+        json.dumps({"truncated": truncated, "cot": request.get("cot"), "seed": request.get("seed")}, indent=2),
+        encoding="utf-8",
+    )
+    ready = "Song ready"
+    if truncated["abc"] or truncated["semantic"]:
+        ready = "Song ready (YuE2 hit a token limit — check the ending)"
+    emit("YUE2_PROGRESS", {"progress": 1., "message": ready})
 
 
 def main() -> None:

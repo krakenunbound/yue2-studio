@@ -35,9 +35,9 @@ import SongStudio from "./SongStudio";
 import EffectsPage from "./EffectsPage";
 import ModelsPage from "./ModelsPage";
 import VoiceProfilesPanel from "./VoiceProfilesPanel";
-import { DEFAULT_LYRICS, EMPTY_VOICE_SLOTS, defaultCreateForm, isCreateFormDirty, needsAutoTitle, SAMPLE_DESCRIPTION, type VoiceSlots } from "./createForm";
+import { COVER_LIMITS, coverTitleFor, DEFAULT_LYRICS, EMPTY_VOICE_SLOTS, defaultCreateForm, isCreateFormDirty, melodyOnlyAbc, needsAutoTitle, REMIX_LIMITS, REMIX_NO_SCORE, remixTitleFor, SAMPLE_DESCRIPTION, songHasScore, type VoiceSlots } from "./createForm";
 import type { VoiceProfile } from "./voiceProfiles";
-import { addSongToPlaylist, assistChat, assistWriting, audioUrl, cancelJob, clearMemory, convertAudio, createPlaylist, createWorkspace, deletePlaylist, deleteSong, deleteWorkspace, downloadUrl, extractStems, generate, getJob, getLibrary, getPlaylists, getStatus, getVoiceProfiles, getWorkspaces, moveSongToWorkspace, openOutputs, openSongFolder, refreshModels, regenerateCover, removeSongFromPlaylist, saveAiKeys, synchronizeLyrics, updateSong, uploadSongCover, videoStudioUrl, type ChatMessage, type Job, type Playlist, type Song, type Status, type TimedLyricLine, type TimedLyrics, type TimedWord, type Workspace } from "./api";
+import { addSongToPlaylist, assistChat, assistWriting, audioUrl, cancelJob, clearMemory, convertAudio, createPlaylist, createWorkspace, deletePlaylist, deleteSong, deleteWorkspace, downloadUrl, extractStems, generate, getJob, getLibrary, getPlaylists, getSongScore, getStatus, getVoiceProfiles, getWorkspaces, moveSongToWorkspace, openOutputs, openSongFolder, refreshModels, regenerateCover, removeSongFromPlaylist, saveAiKeys, synchronizeLyrics, transcribeCover, updateSong, uploadSongCover, videoStudioUrl, type ChatMessage, type Job, type Playlist, type Song, type Status, type TimedLyricLine, type TimedLyrics, type TimedWord, type Workspace } from "./api";
 
 const SAMPLE = SAMPLE_DESCRIPTION;
 const EASY_TEMPLATE_PREVIEW = 8;
@@ -157,11 +157,6 @@ const VOCAL_DELIVERIES: Record<string, string> = {
   theatrical: "Theatrical fully sung performance, strong melodic contour, dramatic sustained notes, distinct section melodies and layered climactic harmonies",
 };
 
-function sentence(value: string) {
-  const clean = value.trim().replace(/[.\s]+$/, "");
-  return clean ? `${clean}.` : "";
-}
-
 const structuredHeading = (name: string) => `^\\s*(?:#{1,6}\\s*)?${name}\\s*:?\\s*$`;
 
 const LYRIC_SECTION = /^\s*\[(?:Intro|Verse|Pre-Chorus|Chorus|Post-Chorus|Bridge|Instrumental|Solo|Outro)\]\s*$/im;
@@ -224,65 +219,78 @@ function isStructuredCaption(value: string) {
   return ["Global Metadata", "Vocal Details", "Arrangement"].every((heading) => new RegExp(structuredHeading(heading), "im").test(value));
 }
 
-const INSTRUMENTAL_VOCAL_DETAILS = "Vocal Gender & Timbre: Instrumental composition; no sung, spoken, chanted, sampled, hummed, or vocal-chop human voice. The principal melodic instrument named in the arrangement occupies the lead role.\nVocal Style: Not applicable; keep the music fully instrumental.\nHarmony/Backing Vocals: None.\nVocal FX: None.";
-const INSTRUMENTAL_BAN = "Fully instrumental. No singing, speech, humming, vocables, oohs, aahs, choir, rap, or vocal chops. A named instrument carries the lead. Write a complete track with a beginning, development, and ending, about 2 to 4 minutes — not a sting, loop, or short intro.";
+const INSTRUMENTAL_STYLE_LOCK = "instrumental, no vocals, no humming, no vocables, no oohs, no aahs, no choir, no rap, no vocal chops, lead instrument only";
+const LANGUAGE_WORD: Record<string, string> = { en: "English", ja: "Japanese", ko: "Korean", pt: "Portuguese", it: "Italian" };
 
-function replaceVocalDetails(value: string, body: string) {
-  const vocalRe = new RegExp(`(${structuredHeading("Vocal Details")})\\s*[\\s\\S]*?(?=${structuredHeading("Arrangement")}|$)`, "im");
-  if (vocalRe.test(value)) return value.replace(vocalRe, `$1\n${body}\n\n`);
-  const arrangementRe = new RegExp(`(${structuredHeading("Arrangement")})`, "im");
-  if (arrangementRe.test(value)) return value.replace(arrangementRe, `Vocal Details\n${body}\n\n$1`);
-  return value.trim();
+function stylePhrase(value: string, cap = 110) {
+  const clean = value.trim().replace(/[.\s]+$/g, "");
+  if (!clean) return "";
+  const stop = clean.search(/[.;](\s|$)/);
+  const text = stop > 0 ? clean.slice(0, stop) : clean;
+  if (text.length <= cap) return text;
+  return text.slice(0, cap).replace(/\s+\S*$/, "").trim();
+}
+
+function flattenStructuredCaption(value: string) {
+  if (!isStructuredCaption(value) && !new RegExp(structuredHeading("Vocal Details"), "im").test(value) && !new RegExp(structuredHeading("Arrangement"), "im").test(value)) {
+    return value.replace(/\s+/g, " ").trim();
+  }
+  const parts = [
+    captionField(value, "Basic Attributes"),
+    captionField(value, "Vocal Gender & Timbre"),
+    captionField(value, "Vocal Style"),
+    captionField(value, "Instrument Lifecycle (Primary/Secondary)") || captionField(value, "Instrument Lifecycle"),
+    captionField(value, "Global Emotional Progression"),
+    captionField(value, "Sonics & Production Profile"),
+  ].map((part) => stylePhrase(part)).filter(Boolean);
+  return parts.join(", ");
 }
 
 function applyDescriptionControls(value: string, instrumentalSong: boolean, gender: "auto" | "female" | "male", exclusions: string) {
-  let result = value.trim();
-  const vocalHeading = structuredHeading("Vocal Details");
-  const arrangementHeading = structuredHeading("Arrangement");
+  let result = flattenStructuredCaption(value).trim();
   if (instrumentalSong) {
-    if (new RegExp(structuredHeading("Vocal Details"), "im").test(result) || new RegExp(structuredHeading("Arrangement"), "im").test(result)) {
-      result = replaceVocalDetails(result, INSTRUMENTAL_VOCAL_DETAILS);
-    }
-    if (!result.includes(INSTRUMENTAL_BAN)) result = `${INSTRUMENTAL_BAN}\n\n${result}`;
-  } else if (gender !== "auto") {
-    const override = `Principal Lead Gender Override: The principal lead singer is ${gender}. This instruction overrides any conflicting lead-gender wording elsewhere in the description.`;
-    if (new RegExp(vocalHeading, "im").test(result)) result = result.replace(new RegExp(`(${vocalHeading})`, "im"), `$1\n${override}`);
-    else result = `${result}\nThe principal lead singer is ${gender}.`;
+    if (!/instrumental/i.test(result)) result = result ? `${INSTRUMENTAL_STYLE_LOCK}. ${result}` : INSTRUMENTAL_STYLE_LOCK;
+  } else if (gender !== "auto" && !new RegExp(`\\b${gender}\\b`, "i").test(result)) {
+    result = result ? `${result}, ${gender} voice` : `${gender} voice`;
   }
   if (exclusions.trim()) {
-    const constraint = `User Exclusions: Do not introduce ${exclusions.trim()}. Preserve the requested instrumentation, vocal behavior, groove, and production instead.`;
-    if (new RegExp(arrangementHeading, "im").test(result)) result = result.replace(new RegExp(`(${arrangementHeading})`, "im"), `$1\n${constraint}`);
-    else result = `${result}\n${constraint}`;
+    const no = exclusions.trim().replace(/^no\s+/i, "");
+    if (!result.toLowerCase().includes(no.toLowerCase())) result = result ? `${result}, no ${no}` : `no ${no}`;
   }
   return result;
 }
 
-function buildStructuredCaption({ genre, tempo, mood, voice, arrangement, production, instrumentalSong, delivery }: {
-  genre: string; tempo: string; mood: string; voice: string; arrangement: string; production: string; instrumentalSong: boolean; delivery: string;
+function buildStylePrompt({ genre, tempo, mood, voice, arrangement, production, instrumentalSong, delivery, language }: {
+  genre: string; tempo: string; mood: string; voice: string; arrangement: string; production: string; instrumentalSong: boolean; delivery: string; language?: string;
 }) {
-  const vocalText = instrumentalSong
-    ? "Vocal Gender & Timbre: Instrumental composition; no sung, spoken, chanted, or sampled human voice. The principal melodic instrument named in the arrangement carries the role normally occupied by a lead singer.\nVocal Style: Not applicable; keep the music fully instrumental.\nHarmony/Backing Vocals: None.\nVocal FX: None."
-    : [
-      `Vocal Gender & Timbre: ${sentence(voice)}`,
-      `Vocal Style: ${sentence(delivery)}`,
-      "Harmony/Backing Vocals: Keep every named singer sonically distinct and preserve their assigned roles across the entire song. Supporting voices enter only in the sections described, and never replace the principal melody unless explicitly requested.",
-      "Vocal FX: Keep effects subordinate to diction and performance. Use natural space appropriate to the production, with no generic choir stack or glossy pop doubling unless requested.",
-    ].join("\n");
-  return [
-    "Global Metadata",
-    `Basic Attributes: ${sentence(tempo)} ${sentence(genre)}`,
-    `Global Emotional Progression: ${sentence(mood)} The emotional shape must evolve section by section rather than remaining at one static intensity.`,
-    `Application Scenarios & Imagery: Let the genre, narrative atmosphere, and lyric imagery define a specific physical scene. Preserve that scene from the opening through the final resolution instead of drifting toward generic contemporary pop.`,
-    `Sonics & Production Profile: ${sentence(production)} Preserve the requested dynamics, frequency balance, stereo depth, and degree of polish throughout.`,
-    "",
-    "Vocal Details",
-    vocalText,
-    "",
-    "Arrangement",
-    `Instrument Lifecycle (Primary/Secondary): ${sentence(arrangement)} State the musical identity immediately, then let secondary elements enter, leave, or transform in support of the written sections.`,
-    "Groove & Foundation Progression: Establish the requested tempo, meter, and pulse clearly, then follow the tagged lyric sections without imposing a generic pop energy curve. Let intensity change only through the instruments and vocal behaviors explicitly requested. Never introduce a faster-feeling double-time groove unless the description asks for one.",
-    "Embellishments, Textures & Spatial FX: Use transitions and environmental texture sparingly and purposefully. Avoid adding genre-default instruments, rhythmic subdivisions, backing choirs, or cinematic impacts that contradict the description.",
-  ].join("\n");
+  const parts: string[] = [];
+  const lang = LANGUAGE_WORD[language || ""] || "";
+  const genrePhrase = stylePhrase(genre, 140);
+  if (lang && genrePhrase && !genrePhrase.toLowerCase().startsWith(lang.toLowerCase())) parts.push(lang);
+  if (genrePhrase) parts.push(genrePhrase);
+  else if (lang) parts.push(lang);
+  if (instrumentalSong) parts.push("instrumental/no vocals");
+  else {
+    const vocal = stylePhrase(voice.replace(/^Singer A \([^)]+\),?\s*/i, ""), 120);
+    if (vocal) parts.push(vocal);
+    const sung = stylePhrase(delivery, 90);
+    if (sung) parts.push(sung);
+  }
+  const instruments = stylePhrase(arrangement, 120);
+  if (instruments) parts.push(instruments);
+  const feel = stylePhrase(mood, 90);
+  if (feel) parts.push(feel);
+  const bpm = tempo.match(/\d{2,3}\s*BPM/i);
+  if (bpm) parts.push(bpm[0].replace(/\s+/g, " "));
+  const mix = stylePhrase(production, 90);
+  if (mix) parts.push(mix);
+  return parts.filter(Boolean).join(", ");
+}
+
+function buildStructuredCaption(args: {
+  genre: string; tempo: string; mood: string; voice: string; arrangement: string; production: string; instrumentalSong: boolean; delivery: string; language?: string;
+}) {
+  return buildStylePrompt(args);
 }
 
 function rewritePastedPrompt(value: string, instrumentalSong: boolean) {
@@ -453,16 +461,12 @@ function SongVisualizer({ src, timedLyrics, onEnded }: { src: string; timedLyric
   useEffect(() => {
     const element = audio.current; const surface = canvas.current;
     if (!element || !surface) return;
-    type CapturableAudio = HTMLAudioElement & { captureStream?: () => MediaStream; mozCaptureStream?: () => MediaStream };
-    let context: AudioContext | null = null; let analyser: AnalyserNode | null = null; let source: MediaStreamAudioSourceNode | null = null;
+    let context: AudioContext | null = null; let analyser: AnalyserNode | null = null; let source: MediaElementAudioSourceNode | null = null;
     let data = new Uint8Array(64); const paint = surface.getContext("2d"); let frame = 0;
     const beginAnalysis = async () => {
       if (context) { if (context.state === "suspended") await context.resume(); return; }
-      const capturable = element as CapturableAudio;
-      const stream = capturable.captureStream?.() ?? capturable.mozCaptureStream?.();
-      if (!stream) return;
       context = new AudioContext(); analyser = context.createAnalyser(); analyser.fftSize = 128; analyser.smoothingTimeConstant = 0.78;
-      source = context.createMediaStreamSource(stream); source.connect(analyser); data = new Uint8Array(analyser.frequencyBinCount);
+      source = context.createMediaElementSource(element); source.connect(analyser); analyser.connect(context.destination); data = new Uint8Array(analyser.frequencyBinCount);
       await context.resume();
     };
     const draw = () => {
@@ -507,7 +511,7 @@ function SongVisualizer({ src, timedLyrics, onEnded }: { src: string; timedLyric
       <span className="transport-volume-icon" aria-hidden="true">VOL</span>
       <input className="transport-volume" aria-label="Volume" type="range" min="0" max="1" step="0.01" value={volume} onChange={(event) => changeVolume(Number(event.target.value))} style={{ "--volume": `${volume * 100}%` } as React.CSSProperties} />
     </div>
-    <audio ref={audio} autoPlay crossOrigin="anonymous" src={src} onEnded={() => { setIsPlaying(false); setCurrentTime(0); onEnded(); }} />
+    <audio ref={audio} key={src} autoPlay src={src} onEnded={() => { setIsPlaying(false); setCurrentTime(0); onEnded(); }} />
   </div>;
 }
 
@@ -566,6 +570,18 @@ export default function App() {
   const [coverDirection, setCoverDirection] = useState("");
   const [stemTarget, setStemTarget] = useState<Song | null>(null);
   const [stemMode, setStemMode] = useState<"2" | "4">("2");
+  const [remixTarget, setRemixTarget] = useState<Song | null>(null);
+  const [remixMode, setRemixMode] = useState<"melody" | "full">("melody");
+  const [remixStyle, setRemixStyle] = useState("");
+  const [remixKeepLyrics, setRemixKeepLyrics] = useState(true);
+  const [remixSongTitle, setRemixSongTitle] = useState("");
+  const [audioCoverTarget, setAudioCoverTarget] = useState<Song | null>(null);
+  const [coverMelodyOnly, setCoverMelodyOnly] = useState(true);
+  const [coverAbc, setCoverAbc] = useState("");
+  const [coverWarnings, setCoverWarnings] = useState<string[]>([]);
+  const [coverStyle, setCoverStyle] = useState("");
+  const [coverKeepLyrics, setCoverKeepLyrics] = useState(true);
+  const [coverSongTitle, setCoverSongTitle] = useState("");
   const [libraryBusy, setLibraryBusy] = useState(false);
   const [studioView, setStudioView] = useState<"create" | "library" | "effects" | "models">("create");
   const initialSetupChecked = useRef(false);
@@ -719,9 +735,10 @@ export default function App() {
 
   useEffect(() => {
     if (!videoTool || utilityJob?.kind !== "lyrics_sync") return;
+    if (!["queued", "running"].includes(utilityJob.status)) return;
     const blocker = status?.jobs.find((item) => item.status === "running" && item.id !== utilityJob.id) ?? null;
     videoStudioFrame.current?.contentWindow?.postMessage({ type: "yue2-video-studio-job", job: utilityJob, blocker }, "*");
-  }, [videoTool, utilityJob, status]);
+  }, [videoTool, utilityJob?.id, utilityJob?.kind, utilityJob?.status, utilityJob?.phase, utilityJob?.progress, status?.jobs]);
 
   useEffect(() => {
     if (!("__TAURI_INTERNALS__" in window)) return;
@@ -757,7 +774,13 @@ export default function App() {
     const timer = window.setInterval(async () => {
       try {
         const result = await getJob(utilityJob.id); setUtilityJob(result.job);
-        if (result.job.status === "succeeded") await refresh();
+        if (result.job.status === "succeeded") {
+          await refresh();
+          if (result.job.kind === "sheetsage" && result.job.result?.abc) {
+            setCoverAbc(String(result.job.result.abc));
+            setCoverWarnings(Array.isArray(result.job.result.warnings) ? result.job.result.warnings.map(String) : []);
+          }
+        }
       } catch {
         void getStatus().then((next) => {
           setStatus(next);
@@ -770,10 +793,34 @@ export default function App() {
     return () => window.clearInterval(timer);
   }, [utilityJob?.id, utilityJob?.status]);
 
+  const audioSourceKey = songs.map((song) => `${song.id}:${song.audio_url}`).join("|");
+  const coverSourceKey = songs.map((song) => `${song.id}:${song.cover_url || ""}`).join("|");
   useEffect(() => {
-    void Promise.all(songs.map(async (song) => [song.id, await audioUrl(song.audio_url)] as const)).then((pairs) => setAudioSources(Object.fromEntries(pairs)));
-    void Promise.all(songs.filter((song) => song.cover_url).map(async (song) => [song.id, await audioUrl(song.cover_url!)] as const)).then((pairs) => setCoverSources(Object.fromEntries(pairs)));
-  }, [songs]);
+    let cancelled = false;
+    void Promise.all(songs.map(async (song) => [song.id, await audioUrl(song.audio_url)] as const)).then((pairs) => {
+      if (cancelled) return;
+      const next = Object.fromEntries(pairs);
+      setAudioSources((current) => {
+        const keys = Object.keys(next);
+        if (keys.length === Object.keys(current).length && keys.every((key) => current[key] === next[key])) return current;
+        return next;
+      });
+    });
+    return () => { cancelled = true; };
+  }, [audioSourceKey]);
+  useEffect(() => {
+    let cancelled = false;
+    void Promise.all(songs.filter((song) => song.cover_url).map(async (song) => [song.id, await audioUrl(song.cover_url!)] as const)).then((pairs) => {
+      if (cancelled) return;
+      const next = Object.fromEntries(pairs);
+      setCoverSources((current) => {
+        const keys = Object.keys(next);
+        if (keys.length === Object.keys(current).length && keys.every((key) => current[key] === next[key])) return current;
+        return next;
+      });
+    });
+    return () => { cancelled = true; };
+  }, [coverSourceKey]);
 
   useEffect(() => {
     if (!editingSong) return;
@@ -788,7 +835,7 @@ export default function App() {
       if (!(event.target instanceof Element) || !event.target.closest("[data-bulk-bar]")) setBulkMenu(null);
     };
     const escape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") { setOpenMenu(null); setOpenSongSubmenu(null); setSongMenuPosition(null); setExpandedStems(null); setEditingSong(null); setDeleteTargets([]); setBulkMenu(null); setCoverTarget(null); setStemTarget(null); setSystemOpen(false); setLogsOpen(false); setKeysOpen(false); setLyricAssist(null); setRightDrawer(null); setEditorSong(null); setVideoTool(null); setPromptHelpOpen(false); setTemplatesOpen(false); }
+      if (event.key === "Escape") { setOpenMenu(null); setOpenSongSubmenu(null); setSongMenuPosition(null); setExpandedStems(null); setEditingSong(null); setDeleteTargets([]); setBulkMenu(null); setCoverTarget(null); setStemTarget(null); setRemixTarget(null); setAudioCoverTarget(null); setSystemOpen(false); setLogsOpen(false); setKeysOpen(false); setLyricAssist(null); setRightDrawer(null); setEditorSong(null); setVideoTool(null); setPromptHelpOpen(false); setTemplatesOpen(false); }
     };
     window.addEventListener("pointerdown", dismiss);
     window.addEventListener("keydown", escape);
@@ -1024,7 +1071,7 @@ export default function App() {
     setPromptArrangement(preset.arrangement); setPromptProduction(preset.production);
     setInstrumental(presetInstrumental);
     if (preset.language) setLyricsLanguage(preset.language);
-    setDescription(buildStructuredCaption({ genre: preset.genre, tempo: preset.tempo, mood: preset.mood, voice: preset.voice, arrangement: preset.arrangement, production: preset.production, instrumentalSong: presetInstrumental, delivery: preset.delivery ?? VOCAL_DELIVERIES[vocalDelivery] }));
+    setDescription(buildStructuredCaption({ genre: preset.genre, tempo: preset.tempo, mood: preset.mood, voice: preset.voice, arrangement: preset.arrangement, production: preset.production, instrumentalSong: presetInstrumental, delivery: preset.delivery ?? VOCAL_DELIVERIES[vocalDelivery], language: preset.language }));
     setTemplatesOpen(false);
   }
 
@@ -1192,8 +1239,7 @@ export default function App() {
     }, 40);
   }
 
-  // The Suno-style front door: one line of intent becomes a title, a full
-  // structured caption, and a tagged lyric stream in a single round trip.
+  // One line of intent becomes a title, a compact YuE2 style, and tagged lyrics.
   async function composeFromIdea() {
     const idea = songIdea.trim();
     if (!idea) { setComposeError("Type an idea first — a line or two is plenty."); return; }
@@ -1227,9 +1273,7 @@ export default function App() {
     } finally { setComposeBusy(false); }
   }
 
-  // Ask the writing model for a real structured caption instead of pouring the
-  // user's phrases into a fixed template. The backend retrieves matching
-  // reference captions from the bundled library before it prompts.
+  // Ask the writing model for a compact YuE2 style line.
   async function writeCaptionWithAi() {
     // If the user pasted or typed an idea, that IS the brief. The helper fields
     // still hold whichever preset was loaded last, and blending them in is how a
@@ -1286,7 +1330,7 @@ export default function App() {
   }
 
   function applyPromptHelp() {
-    setDescription(buildStructuredCaption({ genre: promptGenre, tempo: promptTempo, mood: promptMood, voice: promptVoice, arrangement: promptArrangement, production: promptProduction, instrumentalSong: instrumental, delivery: promptDeliveryOverride ?? VOCAL_DELIVERIES[vocalDelivery] }));
+    setDescription(buildStructuredCaption({ genre: promptGenre, tempo: promptTempo, mood: promptMood, voice: promptVoice, arrangement: promptArrangement, production: promptProduction, instrumentalSong: instrumental, delivery: promptDeliveryOverride ?? VOCAL_DELIVERIES[vocalDelivery], language: lyricsLanguage }));
     setPromptHelpOpen(false);
   }
 
@@ -1383,6 +1427,13 @@ export default function App() {
     setOpenMenu(null); setEditingSong(song); setEditTitle(song.title); setEditArtist(song.artist || ""); setEditAlbum(song.album || ""); setEditGenre(song.genre || ""); setEditYear(song.year || song.created_at?.slice(0, 4) || ""); setEditTrackNumber(song.track_number || ""); setEditCoverDirection(""); setEditDescription(song.description); setEditLyrics(song.lyrics || ""); setEditTranslation(song.english_translation || ""); setEditLyricsLanguage(song.lyrics_language || "en");
   }
 
+  async function plannedScore(song: Song) {
+    if (song.abc_score?.trim()) return song.abc_score.trim();
+    if (!song.has_score) return "";
+    try { return ((await getSongScore(songFolderName(song))).abc || "").trim(); }
+    catch { return ""; }
+  }
+
   function reuseSong(song: Song) {
     setTitle(song.title); setArtist(song.artist || ""); setAlbum(song.album || ""); setGenre(song.genre || ""); setDescription(song.description); setLyrics(song.lyrics || ""); setEnglishTranslation(song.english_translation || ""); setLyricsLanguage(song.lyrics_language || "en"); setInstrumental(song.instrumental);
     // "Reuse as new song" keeps the creative setup but should produce a new
@@ -1391,6 +1442,7 @@ export default function App() {
     setLockedSeed("");
     setCotMode(song.cot_mode ?? "full");
     setAbcScore(song.abc_score ?? "");
+    void plannedScore(song).then((abc) => { if (abc) setAbcScore(abc); });
     setCfg(song.cfg ?? 1.0);
     setSteps(song.steps ?? 32);
     setTopK(song.top_k ?? 100);
@@ -1470,6 +1522,155 @@ export default function App() {
     setLibraryBusy(true); setError("");
     try { const result = await extractStems(songFolderName(stemTarget), stemMode); setUtilityJob(result.job); setRightDrawer("job"); }
     catch (reason: any) { setError(reason?.message ?? String(reason)); }
+    finally { setLibraryBusy(false); }
+  }
+
+  function openRemix(song: Song) {
+    setOpenMenu(null);
+    setRemixMode("melody");
+    setRemixStyle(song.description);
+    setRemixKeepLyrics(!song.instrumental && Boolean(song.lyrics?.trim()));
+    setRemixSongTitle(remixTitleFor(song.title));
+    setRemixTarget(song);
+    void plannedScore(song).then((abc) => {
+      if (abc) setRemixTarget((current) => current && current.id === song.id ? { ...current, abc_score: abc } : current);
+    });
+  }
+
+  async function startRemix() {
+    if (!remixTarget) return;
+    const abc = remixTarget.abc_score?.trim() || "";
+    const score = remixMode === "melody" ? melodyOnlyAbc(abc) : abc;
+    if (!score) {
+      setError(REMIX_NO_SCORE);
+      return;
+    }
+    const generating = Boolean(generationJob && ["queued", "running"].includes(generationJob.status));
+    if (!ready || generating) {
+      setError(generating ? "Wait for the current song to finish." : blocker);
+      return;
+    }
+    const instrumentalSong = remixTarget.instrumental || !remixKeepLyrics;
+    const productionDescription = applyDescriptionControls(
+      remixStyle.trim() || remixTarget.description,
+      instrumentalSong,
+      remixTarget.vocal_gender ?? "auto",
+      remixTarget.exclude_styles ?? "",
+    );
+    if (!productionDescription.trim()) {
+      setError("Describe the new arrangement before remixing.");
+      return;
+    }
+    setLibraryBusy(true); setError("");
+    try {
+      const result = await generate({
+        title: (remixSongTitle.trim() || remixTitleFor(remixTarget.title)).slice(0, 120),
+        artist: remixTarget.artist || "",
+        album: remixTarget.album || "",
+        genre: remixTarget.genre || "",
+        description: productionDescription,
+        lyrics: instrumentalSong ? "" : remixTarget.lyrics,
+        english_translation: instrumentalSong ? "" : (remixTarget.english_translation || ""),
+        lyrics_language: remixTarget.lyrics_language || "en",
+        instrumental: instrumentalSong,
+        seed: null,
+        cot_mode: remixMode,
+        abc_score: score,
+        cfg: remixTarget.cfg ?? 1.0,
+        steps: remixTarget.steps ?? 32,
+        top_k: remixTarget.top_k ?? 100,
+        temperature: remixTarget.temperature ?? 1.0,
+        exclude_styles: remixTarget.exclude_styles ?? "",
+        vocal_gender: remixTarget.vocal_gender ?? "auto",
+        voice_slots: instrumentalSong ? EMPTY_VOICE_SLOTS : {
+          female: remixTarget.voice_slots?.female || "",
+          male: remixTarget.voice_slots?.male || "",
+          backing: remixTarget.voice_slots?.backing || "",
+        },
+      });
+      setGenerationJob(result.job);
+      setRemixTarget(null);
+      setRightDrawer("job");
+    } catch (reason: any) { setError(reason?.message ?? String(reason)); }
+    finally { setLibraryBusy(false); }
+  }
+
+  function openAudioCover(song: Song) {
+    setOpenMenu(null);
+    setCoverMelodyOnly(true);
+    setCoverAbc("");
+    setCoverWarnings([]);
+    setCoverStyle(song.description);
+    setCoverKeepLyrics(!song.instrumental && Boolean(song.lyrics?.trim()));
+    setCoverSongTitle(coverTitleFor(song.title));
+    setAudioCoverTarget(song);
+  }
+
+  async function startCoverTranscribe(reuseCached = true) {
+    if (!audioCoverTarget) return;
+    setLibraryBusy(true); setError("");
+    try {
+      const result = await transcribeCover(songFolderName(audioCoverTarget), { melody_only: coverMelodyOnly, reuse_cached: reuseCached });
+      setUtilityJob(result.job);
+      setRightDrawer("job");
+    } catch (reason: any) { setError(reason?.message ?? String(reason)); }
+    finally { setLibraryBusy(false); }
+  }
+
+  async function startAudioCoverGenerate() {
+    if (!audioCoverTarget) return;
+    const abc = coverAbc.trim();
+    if (!abc) {
+      setError("Transcribe the recording first, then review the lead sheet.");
+      return;
+    }
+    const generating = Boolean(generationJob && ["queued", "running"].includes(generationJob.status));
+    if (!ready || generating) {
+      setError(generating ? "Wait for the current song to finish." : blocker);
+      return;
+    }
+    const instrumentalSong = audioCoverTarget.instrumental || !coverKeepLyrics;
+    const productionDescription = applyDescriptionControls(
+      coverStyle.trim() || audioCoverTarget.description,
+      instrumentalSong,
+      audioCoverTarget.vocal_gender ?? "auto",
+      audioCoverTarget.exclude_styles ?? "",
+    );
+    if (!productionDescription.trim()) {
+      setError("Describe the new arrangement before generating the cover.");
+      return;
+    }
+    setLibraryBusy(true); setError("");
+    try {
+      const result = await generate({
+        title: (coverSongTitle.trim() || coverTitleFor(audioCoverTarget.title)).slice(0, 120),
+        artist: audioCoverTarget.artist || "",
+        album: audioCoverTarget.album || "",
+        genre: audioCoverTarget.genre || "",
+        description: productionDescription,
+        lyrics: instrumentalSong ? "" : audioCoverTarget.lyrics,
+        english_translation: instrumentalSong ? "" : (audioCoverTarget.english_translation || ""),
+        lyrics_language: audioCoverTarget.lyrics_language || "en",
+        instrumental: instrumentalSong,
+        seed: null,
+        cot_mode: coverMelodyOnly ? "melody" : "full",
+        abc_score: coverMelodyOnly ? melodyOnlyAbc(abc) : abc,
+        cfg: audioCoverTarget.cfg ?? 1.0,
+        steps: audioCoverTarget.steps ?? 32,
+        top_k: audioCoverTarget.top_k ?? 100,
+        temperature: audioCoverTarget.temperature ?? 1.0,
+        exclude_styles: audioCoverTarget.exclude_styles ?? "",
+        vocal_gender: audioCoverTarget.vocal_gender ?? "auto",
+        voice_slots: instrumentalSong ? EMPTY_VOICE_SLOTS : {
+          female: audioCoverTarget.voice_slots?.female || "",
+          male: audioCoverTarget.voice_slots?.male || "",
+          backing: audioCoverTarget.voice_slots?.backing || "",
+        },
+      });
+      setGenerationJob(result.job);
+      setAudioCoverTarget(null);
+      setRightDrawer("job");
+    } catch (reason: any) { setError(reason?.message ?? String(reason)); }
     finally { setLibraryBusy(false); }
   }
 
@@ -1721,8 +1922,8 @@ export default function App() {
             <button type="button" className={`more-options-button ${moreOptions ? "open" : ""}`} aria-expanded={moreOptions} aria-controls="yue2-more-options" onClick={() => setMoreOptions((open) => !open)}><svg className="options-sliders" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h2M10 17h10M14 4v6M8 14v6" /></svg><span>YuE2 options</span><i className="options-chevron" aria-hidden="true" /></button>
             {moreOptions && <section className="more-options-card" id="yue2-more-options">
               <div className="metadata-grid"><label>Album <input value={album} onChange={(event) => setAlbum(event.target.value)} placeholder="Optional album name" /></label><label>Genre <input value={genre} onChange={(event) => setGenre(event.target.value)} placeholder="Optional genre" /></label></div>
-              <label>CoT generation mode<select value={cotMode} onChange={(event) => setCotMode(event.target.value as "full" | "melody" | "off")}><option value="full">Full (recommended)</option><option value="melody">Melody only</option><option value="off">Off</option></select><small>Controls YuE2's chain-of-thought music planning pass.</small></label>
-              <label>Optional ABC score<textarea value={abcScore} onChange={(event) => setAbcScore(event.target.value)} rows={5} placeholder="X:1&#10;T:Melody guide&#10;M:4/4&#10;K:C&#10;CDEF GABc" /><small>Supply an ABC melody or leave this blank for YuE2 to compose freely.</small></label>
+              <label>Symbolic planning<select value={cotMode} onChange={(event) => setCotMode(event.target.value as "full" | "melody" | "off")}><option value="full">Full — melody and chords (recommended)</option><option value="melody">Melody only — free accompaniment, for covers</option><option value="off">Off — no editable score</option></select><small>YuE2 writes an editable score before audio. Full is the default for new songs.</small></label>
+              <label>Optional ABC score<textarea value={abcScore} onChange={(event) => setAbcScore(event.target.value)} rows={8} placeholder={'X:1\nT:\nM:4/4\nL:1/16\nQ:1/4=88\nV: Vocal clef=treble name="Vocal Melody" snm="Vocal"\nV: Ins clef=treble name="Ins Melody" snm="Inst."\nK:C'} /><small>Native YuE2 scores use Vocal and Ins voices. For covers, omit chord symbols and use Melody only. Leave blank for YuE2 to compose.</small></label>
               <label>Exclude styles <input value={excludeStyles} onChange={(event) => setExcludeStyles(event.target.value)} placeholder="festival EDM drops, pop belting, trap hats…" /></label>
               {!instrumental && <label>Vocal gender <div className="segmented"><button type="button" className={vocalGender === "auto" ? "active" : ""} onClick={() => setVocalGender("auto")}>Auto</button><button type="button" className={vocalGender === "male" ? "active" : ""} onClick={() => setVocalGender("male")}>Male</button><button type="button" className={vocalGender === "female" ? "active" : ""} onClick={() => setVocalGender("female")}>Female</button></div></label>}
               <div className="advanced-row"><label>CFG<input type="number" min="0" max="20" step="0.1" value={cfg} onChange={(event) => setCfg(Math.max(0, Math.min(20, Number(event.target.value))))} /></label><label>Flow steps<input type="number" min="1" max="200" value={steps} onChange={(event) => setSteps(Math.max(1, Math.min(200, Number(event.target.value))))} /></label><label>Top-k<input type="number" min="1" max="16384" value={topK} onChange={(event) => setTopK(Math.max(1, Math.min(16384, Number(event.target.value))))} /></label><label>Temperature<input type="number" min="0" max="5" step="0.1" value={temperature} onChange={(event) => setTemperature(Math.max(0, Math.min(5, Number(event.target.value))))} /></label><label>Seed<input inputMode="numeric" value={lockedSeed} onChange={(event) => setLockedSeed(event.target.value.replace(/\D/g, ""))} placeholder="Random" /></label></div>
@@ -1906,6 +2107,8 @@ export default function App() {
               <button className="dots" aria-label={`More actions for ${song.title}`} aria-expanded={openMenu === song.id} onClick={(event) => { event.stopPropagation(); toggleSongMenu(song.id, event.currentTarget); }}>•••</button>
               {openMenu === song.id && songMenuPosition && <div className={`song-menu side-popout side-${songMenuPosition.side}`} style={{ left: songMenuPosition.left, top: songMenuPosition.top, maxHeight: songMenuPosition.maxHeight }} role="menu">
                 <button onClick={() => reuseSong(song)}><span className="menu-icon" aria-hidden="true">↻</span>Reuse as new song</button>
+                <span className="menu-tip" title={!songHasScore(song) ? REMIX_NO_SCORE : !ready ? blocker : generationJob && ["queued", "running"].includes(generationJob.status) ? "Wait for the current song to finish." : REMIX_LIMITS}><button disabled={!songHasScore(song) || !ready || Boolean(generationJob && ["queued", "running"].includes(generationJob.status))} title={!songHasScore(song) ? REMIX_NO_SCORE : !ready ? blocker : generationJob && ["queued", "running"].includes(generationJob.status) ? "Wait for the current song to finish." : REMIX_LIMITS} onClick={() => openRemix(song)}><span className="menu-icon" aria-hidden="true">⇄</span>Remix this song</button></span>
+                <span className="menu-tip" title={!status?.sheetsage?.ready ? status?.sheetsage?.detail || "Install SheetSage2 in Models to cover from audio." : COVER_LIMITS}><button disabled={!status?.sheetsage?.ready || Boolean(generationJob && ["queued", "running"].includes(generationJob.status))} title={!status?.sheetsage?.ready ? status?.sheetsage?.detail || "Install SheetSage2 in Models to cover from audio." : COVER_LIMITS} onClick={() => openAudioCover(song)}><span className="menu-icon" aria-hidden="true">♪</span>Cover from audio</button></span>
                 <button onClick={() => void openAudioEditor(song)}><span className="menu-icon" aria-hidden="true">≋</span>Open in Studio</button>
                 <button onClick={() => void openVideoStudio(song)}><span className="menu-icon" aria-hidden="true">▶</span>Make video</button>
                 <button onClick={() => editSong(song)}><span className="menu-icon" aria-hidden="true">✎</span>Edit song details</button>
@@ -1983,7 +2186,7 @@ export default function App() {
     </aside>}
     <Logs open={logsOpen} onClose={() => setLogsOpen(false)} width={leftDrawerWidth} onResizeStart={(event) => beginDrawerResize("left", event)} />
     <KeysDrawer open={keysOpen} onClose={() => setKeysOpen(false)} width={leftDrawerWidth} onResizeStart={(event) => beginDrawerResize("left", event)} />
-    {rightDrawer === "job" && <aside className="right-drawer job-drawer" style={{ width: rightDrawerWidth }}><div className="drawer-resizer left" role="separator" aria-label="Resize Job panel" onPointerDown={(event) => beginDrawerResize("right", event)} /><div className="drawer-head"><div><div className="eyebrow">CURRENT JOB</div><h2>{displayJob?.kind === "yue2" ? "Song generation" : displayJob?.kind === "cover_art" ? "Cover art" : displayJob?.kind === "stems" ? "Stem extraction" : displayJob?.kind === "lyrics_sync" ? "Lyric synchronization" : "Generation"}</h2></div><button onClick={() => setRightDrawer(null)}>✕</button></div>{displayJob ? <><div className={`job-banner ${displayJob.status}`}><div><strong>{displayJob.phase}</strong><span>{displayJob.error || timingLabel(displayJob)}</span></div><div className="progress"><i style={{ width: `${Math.round(displayJob.progress * 100)}%` }} /></div>{displayJob.stage_progress != null && displayJob.phase.includes("thumbnail") && <div className="stage-progress"><span>Thumbnail</span><b>{Math.round(displayJob.stage_progress * 100)}%</b><div className="progress"><i style={{ width: `${Math.round(displayJob.stage_progress * 100)}%` }} /></div></div>}</div><section className="card kv"><span>status</span><b>{displayJob.status}</b><span>progress</span><b>{Math.round(displayJob.progress * 100)}%</b><span>elapsed</span><b>{elapsedLabel(displayJob)}</b><span>remaining</span><b>{remainingLabel(displayJob) || "—"}</b><span>active jobs</span><b>{activeJobs}</b></section>{["queued", "running"].includes(displayJob.status) && <button className="danger memory" onClick={() => void cancelJob(displayJob.id)}>Cancel {displayJob.kind === "yue2" ? "generation" : "task"}</button>}</> : <div className="drawer-empty"><span>♫</span><strong>No active generation</strong><p>Your next YuE2 job will appear here with live progress and cancellation.</p></div>}</aside>}
+    {rightDrawer === "job" && <aside className="right-drawer job-drawer" style={{ width: rightDrawerWidth }}><div className="drawer-resizer left" role="separator" aria-label="Resize Job panel" onPointerDown={(event) => beginDrawerResize("right", event)} /><div className="drawer-head"><div><div className="eyebrow">CURRENT JOB</div><h2>{displayJob?.kind === "yue2" ? "Song generation" : displayJob?.kind === "cover_art" ? "Cover art" : displayJob?.kind === "stems" ? "Stem extraction" : displayJob?.kind === "lyrics_sync" ? "Lyric synchronization" : displayJob?.kind === "sheetsage" ? "Cover transcription" : "Generation"}</h2></div><button onClick={() => setRightDrawer(null)}>✕</button></div>{displayJob ? <><div className={`job-banner ${displayJob.status}`}><div><strong>{displayJob.phase}</strong><span>{displayJob.error || timingLabel(displayJob)}</span></div><div className="progress"><i style={{ width: `${Math.round(displayJob.progress * 100)}%` }} /></div>{displayJob.stage_progress != null && displayJob.phase.includes("thumbnail") && <div className="stage-progress"><span>Thumbnail</span><b>{Math.round(displayJob.stage_progress * 100)}%</b><div className="progress"><i style={{ width: `${Math.round(displayJob.stage_progress * 100)}%` }} /></div></div>}</div><section className="card kv"><span>status</span><b>{displayJob.status}</b><span>progress</span><b>{Math.round(displayJob.progress * 100)}%</b><span>elapsed</span><b>{elapsedLabel(displayJob)}</b><span>remaining</span><b>{remainingLabel(displayJob) || "—"}</b><span>active jobs</span><b>{activeJobs}</b></section>{["queued", "running"].includes(displayJob.status) && <button className="danger memory" onClick={() => void cancelJob(displayJob.id)}>Cancel {displayJob.kind === "yue2" ? "generation" : "task"}</button>}</> : <div className="drawer-empty"><span>♫</span><strong>No active generation</strong><p>Your next YuE2 job will appear here with live progress and cancellation.</p></div>}</aside>}
     {rightDrawer === "details" && <aside className="right-drawer details-drawer" style={{ width: rightDrawerWidth }}><div className="drawer-resizer left" role="separator" aria-label="Resize Details panel" onPointerDown={(event) => beginDrawerResize("right", event)} /><div className="drawer-head"><div><div className="eyebrow">SONG DETAILS</div><h2>{selectedSong?.title ?? "No song selected"}</h2></div><button onClick={() => setRightDrawer(null)}>✕</button></div>{selectedSong ? <><p className="details-summary">{selectedSong.description}</p><section className="card kv"><span>artist</span><b>{selectedSong.artist || "Not set"}</b><span>album</span><b>{selectedSong.album || "Not set"}</b><span>genre</span><b>{selectedSong.genre || "Not set"}</b><span>year / track</span><b>{[selectedSong.year, selectedSong.track_number].filter(Boolean).join(" / ") || "Not set"}</b><span>type</span><b>{selectedSong.instrumental ? "Instrumental" : "Vocal"}</b><span>seed</span><b>{selectedSong.seed}</b><span>lyrics</span><b>{selectedSong.timed_lyrics?.lines?.length ? `${selectedSong.timed_lyrics.lines.length} timed lines` : "not synchronized"}</b><span>created</span><b>{selectedSong.created_at}</b></section>{selectedSong.lyrics && <section className="details-lyrics"><div className="eyebrow">LYRICS</div><pre>{selectedSong.lyrics}</pre></section>}{selectedSong.english_translation && <section className="details-lyrics"><div className="eyebrow">ENGLISH TRANSLATION</div><pre>{selectedSong.english_translation}</pre></section>}<div className="detail-actions"><button onClick={() => editSong(selectedSong)}>Edit details</button><button disabled={!status?.lyrics_sync.ready || selectedSong.instrumental} onClick={() => void startLyricsSync(selectedSong)}>{selectedSong.timed_lyrics?.lines?.length ? "Re-sync lyrics" : "Sync lyrics"}</button><button onClick={() => void openAudioEditor(selectedSong)}>Studio</button><button onClick={() => void openVideoStudio(selectedSong)}>Make video</button><button onClick={() => reuseSong(selectedSong)}>Reuse song</button><button onClick={() => downloadSong(selectedSong)}>Download WAV</button><button onClick={() => void openSongFolder(songFolderName(selectedSong))}>Open folder</button></div></> : <div className="drawer-empty"><span>♫</span><strong>Select a song</strong><p>Choose a library song to see its saved prompt, seed, lyrics, and actions.</p></div>}</aside>}
     {videoTool && <section className="tool-workspace video-tool-workspace" aria-label={`Video Studio for ${videoTool.song.title}`}><header className="tool-head"><div><div className="eyebrow">STUDIO TOOL</div><h2>Video Studio</h2><span>{videoTool.song.title} · local visualizer and MP4 renderer</span></div><button onClick={() => setVideoTool(null)}>Close</button></header><iframe ref={videoStudioFrame} title={`Video Studio — ${videoTool.song.title}`} src={videoTool.url} allow="autoplay" /></section>}
     {activeEditorSong && <SongStudio key={activeEditorSong.id} song={activeEditorSong} mixUrl={editorSource} stemJob={studioStemJob} stemsReady={Boolean(status?.stems.ready)} soundEffectsReady={Boolean(status?.sound_effects.ready)} soundEffectsDetail={status?.sound_effects.detail ?? "Sound-effects setup is not installed."} onStartStems={() => void startStudioStems()} onMixExported={() => { void refresh(); }} onClose={() => { studioStemKick.current = ""; setEditorSong(null); void refresh(); }} />}
@@ -2075,6 +2278,41 @@ export default function App() {
       </section>
     </div>}
     {downloadNotice && <div className="download-toast" role="status" aria-live="polite"><span aria-hidden="true">✓</span><div><strong>Download started</strong><p>{downloadNotice.replace(/^Download started — /, "")}</p></div><button aria-label="Dismiss download message" onClick={() => setDownloadNotice("")}>✕</button></div>}
+    {remixTarget && <div className="modal-backdrop" role="presentation" onPointerDown={(event) => { if (event.target === event.currentTarget) setRemixTarget(null); }}>
+      <section className="modal-card remix-dialog" role="dialog" aria-modal="true" aria-labelledby="remix-title">
+        <div className="modal-head"><div><div className="eyebrow">REMIX</div><h2 id="remix-title">Remix “{remixTarget.title}”</h2></div><button onClick={() => setRemixTarget(null)}>✕</button></div>
+        <p className="modal-note">This writes a new song from the saved score. It keeps the tune, not the original singer, mix, or vocal take. Without lyrics, YuE2 sings English-like gibberish — including for Japanese.</p>
+        <div className="stem-choices">
+          <button type="button" className={remixMode === "melody" ? "active" : ""} onClick={() => setRemixMode("melody")}><strong>Keep the melody</strong><span>New arrangement, chords, and singer</span><b>Recommended cover</b></button>
+          <button type="button" className={remixMode === "full" ? "active" : ""} onClick={() => setRemixMode("full")}><strong>Keep melody and chords</strong><span>Same harmony, new production</span><b>Closer arrangement</b></button>
+        </div>
+        <label>New song title<input value={remixSongTitle} maxLength={120} onChange={(event) => setRemixSongTitle(event.target.value)} /></label>
+        <label>New style / arrangement<textarea autoFocus rows={5} value={remixStyle} onChange={(event) => setRemixStyle(event.target.value)} placeholder="Example: Jazz-funk, warm lead vocal, Rhodes piano, electric bass, tight drums" /></label>
+        {!remixTarget.instrumental && <label className="switch remix-keep"><input type="checkbox" checked={remixKeepLyrics} onChange={(event) => setRemixKeepLyrics(event.target.checked)} /><span />Keep the lyrics</label>}
+        <p className="modal-note">{remixKeepLyrics && !remixTarget.instrumental ? "The original words are sung again. Change the style box to steer genre, voice, and instruments." : "No lyric sheet is sent. YuE2 will invent English-like phonemes."}</p>
+        {error && <div className="error">{error}</div>}
+        <div className="modal-actions"><button onClick={() => setRemixTarget(null)}>Cancel</button><button className="primary" disabled={libraryBusy || !ready || !remixStyle.trim() || Boolean(generationJob && ["queued", "running"].includes(generationJob.status))} onClick={() => void startRemix()}>{libraryBusy ? "Starting…" : "Generate remix"}</button></div>
+      </section>
+    </div>}
+    {audioCoverTarget && <div className="modal-backdrop" role="presentation" onPointerDown={(event) => { if (event.target === event.currentTarget && utilityJob?.kind !== "sheetsage") setAudioCoverTarget(null); }}>
+      <section className="modal-card remix-dialog" role="dialog" aria-modal="true" aria-labelledby="audio-cover-title">
+        <div className="modal-head"><div><div className="eyebrow">COVER FROM AUDIO</div><h2 id="audio-cover-title">Cover “{audioCoverTarget.title}”</h2></div><button onClick={() => setAudioCoverTarget(null)}>✕</button></div>
+        <p className="modal-note">SheetSage2 transcribes this recording into a lead sheet. YuE2 then sings a new performance. It keeps the transcribed tune, not the original singer, mix, or vocal take. Review the ABC before generating.</p>
+        <div className="stem-choices">
+          <button type="button" className={coverMelodyOnly ? "active" : ""} onClick={() => { setCoverMelodyOnly(true); setCoverAbc(""); setCoverWarnings([]); }}><strong>Keep the melody</strong><span>Chord-free Vocal and Ins ABC</span><b>Official cover path</b></button>
+          <button type="button" className={!coverMelodyOnly ? "active" : ""} onClick={() => { setCoverMelodyOnly(false); setCoverAbc(""); setCoverWarnings([]); }}><strong>Keep melody and chords</strong><span>Full lead sheet, then Full planning</span><b>Closer harmony</b></button>
+        </div>
+        {utilityJob?.kind === "sheetsage" && ["queued", "running"].includes(utilityJob.status) ? <div className="job-banner"><strong>{utilityJob.phase}</strong><div className="progress"><i style={{ width: `${Math.round(utilityJob.progress * 100)}%` }} /></div><div className="modal-actions"><button className="danger" onClick={() => void cancelJob(utilityJob.id)}>Cancel transcription</button></div></div> : <div className="modal-actions"><button type="button" disabled={libraryBusy} onClick={() => void startCoverTranscribe(true)}>{libraryBusy ? "Starting…" : coverAbc ? "Re-transcribe" : "Transcribe recording"}</button></div>}
+        {coverWarnings.length > 0 && <p className="modal-note">{coverWarnings.join(" ")}</p>}
+        {coverAbc && <label>Lead sheet (ABC)<textarea rows={8} value={coverAbc} onChange={(event) => setCoverAbc(event.target.value)} spellCheck={false} /></label>}
+        <label>New song title<input value={coverSongTitle} maxLength={120} onChange={(event) => setCoverSongTitle(event.target.value)} /></label>
+        <label>New style / arrangement<textarea rows={4} value={coverStyle} onChange={(event) => setCoverStyle(event.target.value)} placeholder="Example: Jazz-funk, warm lead vocal, Rhodes piano, electric bass, tight drums" /></label>
+        {!audioCoverTarget.instrumental && <label className="switch remix-keep"><input type="checkbox" checked={coverKeepLyrics} onChange={(event) => setCoverKeepLyrics(event.target.checked)} /><span />Keep the lyrics</label>}
+        <p className="modal-note">{coverKeepLyrics && !audioCoverTarget.instrumental ? "The original words are sung again. Change the style box to steer genre, voice, and instruments." : "No lyric sheet is sent. YuE2 will invent English-like phonemes."}</p>
+        {error && <div className="error">{error}</div>}
+        <div className="modal-actions"><button onClick={() => setAudioCoverTarget(null)}>Cancel</button><button className="primary" disabled={libraryBusy || !ready || !coverAbc.trim() || !coverStyle.trim() || Boolean(generationJob && ["queued", "running"].includes(generationJob.status))} onClick={() => void startAudioCoverGenerate()}>{libraryBusy ? "Starting…" : "Generate cover"}</button></div>
+      </section>
+    </div>}
     {stemTarget && <div className="modal-backdrop" role="presentation" onPointerDown={(event) => { if (event.target === event.currentTarget && utilityJob?.kind !== "stems") setStemTarget(null); }}>
       <section className="modal-card stems-dialog" role="dialog" aria-modal="true" aria-labelledby="stems-title">
         <div className="modal-head"><div><div className="eyebrow">STEM EXTRACTION</div><h2 id="stems-title">Separate “{stemTarget.title}”</h2></div><button onClick={() => setStemTarget(null)}>✕</button></div>

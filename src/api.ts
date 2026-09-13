@@ -99,7 +99,7 @@ export type VoiceProfile = {
   built_in: boolean; archived: boolean; created_at?: string; updated_at?: string; slot?: string;
 };
 export type VoiceCompileResult = { applied: boolean; description: string; preview: string; slots: VoiceSlots; snapshots: VoiceProfile[]; assignments?: string[] };
-export type Song = { id: string; title: string; artist?: string; album?: string; genre?: string; year?: string; track_number?: string; description: string; lyrics: string; english_translation?: string; lyrics_language?: string; timed_lyrics?: TimedLyrics | null; instrumental: boolean; seed: number | null; duration?: number; steps?: number; cfg?: number; top_k?: number; temperature?: number; cot_mode?: "full" | "melody" | "off"; abc_score?: string; exclude_styles?: string; vocal_gender?: "auto" | "female" | "male"; prompt_tokens?: number; voice_slots?: VoiceSlots; voice_snapshots?: VoiceProfile[]; audio_url: string; original_audio_url?: string | null; cover_url?: string | null; cover_error?: string | null; stems?: string[]; studio?: StudioSession; studio_imports?: StudioImport[]; studio_mixes?: { file: string; variant: string; created_at: string }[]; created_at: string; folder: string; folder_name: string };
+export type Song = { id: string; title: string; artist?: string; album?: string; genre?: string; year?: string; track_number?: string; description: string; lyrics: string; english_translation?: string; lyrics_language?: string; timed_lyrics?: TimedLyrics | null; instrumental: boolean; seed: number | null; duration?: number; steps?: number; cfg?: number; top_k?: number; temperature?: number; cot_mode?: "full" | "melody" | "off"; abc_score?: string; has_score?: boolean; exclude_styles?: string; vocal_gender?: "auto" | "female" | "male"; prompt_tokens?: number; voice_slots?: VoiceSlots; voice_snapshots?: VoiceProfile[]; audio_url: string; original_audio_url?: string | null; cover_url?: string | null; cover_error?: string | null; stems?: string[]; studio?: StudioSession; studio_imports?: StudioImport[]; studio_mixes?: { file: string; variant: string; created_at: string }[]; created_at: string; folder: string; folder_name: string };
 export type AiCapabilityStatus = { configured: boolean; enabled: boolean; provider: string };
 export type AiProviderPublic = { label: string; configured: boolean; last4: string | null; updated_at: string | null };
 export type AiCapabilityState = { enabled: boolean; provider: string; model: string };
@@ -113,11 +113,11 @@ export type AiKeysView = {
   capabilities: Record<string, AiCapabilityState>;
 };
 export type SoundEffectsEngineStatus = UtilityStatus & { runtime_ready?: boolean; processor?: string; size_bytes?: number; present?: number; required?: number; max_duration?: number };
-export type Status = { model: ModelStatus; cover_art: CoverArtStatus; stems: UtilityStatus; sound_effects: SoundEffectsEngineStatus & { models?: { stable: SoundEffectsEngineStatus; woosh: SoundEffectsEngineStatus } }; lyrics_sync: UtilityStatus; exports: UtilityStatus; service: ServiceStatus; gpu: GpuStatus; ai?: Record<string, AiCapabilityStatus>; jobs: Job[] };
+export type Status = { model: ModelStatus; cover_art: CoverArtStatus; stems: UtilityStatus; sound_effects: SoundEffectsEngineStatus & { models?: { stable: SoundEffectsEngineStatus; woosh: SoundEffectsEngineStatus } }; lyrics_sync: UtilityStatus; sheetsage?: UtilityStatus; exports: UtilityStatus; service: ServiceStatus; gpu: GpuStatus; ai?: Record<string, AiCapabilityStatus>; jobs: Job[] };
 export type LogEntry = { id: number; ts: number; level: string; logger: string; message: string };
 export type ModelInstallStatus = { status: "idle" | "running" | "succeeded" | "failed" | "cancelled"; phase: string; progress: number; error?: string | null };
 export type DownloadableModel = {
-  id: "yue2" | "whisper" | "cover_art" | "stems" | "sound_effects";
+  id: "yue2" | "whisper" | "cover_art" | "stems" | "sound_effects" | "sheetsage";
   name: string; description: string; does: string; optional: boolean;
   gated?: boolean; source_url?: string;
   ready: boolean; model_ready: boolean; runtime_ready: boolean;
@@ -173,6 +173,8 @@ export const addEffectToStudio = (effectId: string, folder: string) => request<{
 export const deleteEffect = (effectId: string) => request<{ deleted: boolean }>(`/api/effects/${encodeURIComponent(effectId)}`, { method: "DELETE" });
 export const removeStudioTrack = (folder: string, filename: string) => request<{ removed: boolean }>(`/api/library/${encodeURIComponent(folder)}/studio/tracks/${encodeURIComponent(filename)}`, { method: "DELETE" });
 export const synchronizeLyrics = (folder: string) => request<{ job: Job }>(`/api/library/${encodeURIComponent(folder)}/lyrics-sync`, { method: "POST" });
+export const transcribeCover = (folder: string, body: { melody_only?: boolean; reuse_cached?: boolean }) => request<{ job: Job }>(`/api/library/${encodeURIComponent(folder)}/cover-transcribe`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+export const getSongScore = (folder: string) => request<{ abc: string; has_score: boolean }>(`/api/library/${encodeURIComponent(folder)}/score`);
 export const generate = (body: object) => request<{ job: Job }>("/api/generate", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 export const getJob = (id: string) => request<{ job: Job }>(`/api/jobs/${id}`);
 export const cancelJob = (id: string) => request<{ status: string }>(`/api/jobs/${id}/cancel`, { method: "POST" });

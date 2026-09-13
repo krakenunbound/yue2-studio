@@ -386,5 +386,238 @@
       "sha256": "6e99a4bd495cbef738141e6a53e6a6fd4a9322edbea9fb0cd7503059edba0ef2",
       "text": "722cf37b1afa9454edce342e7895e588b6ff1d59"
     }
+  ],
+  "sheetsage": [
+    {
+      "path": "models/sheetsage2/LICENSE",
+      "url": "https://huggingface.co/m-a-p/SheetSage2/resolve/eab522a8168e8b8b8c4856bf8609cd86198f01fe/LICENSE",
+      "bytes": 20000,
+      "sha256": null,
+      "git_sha1": "ce18e5ba29e6ad24f24b0bfaa4a682a6cf824ff6"
+    },
+    {
+      "path": "models/sheetsage2/THIRD_PARTY_NOTICES.md",
+      "url": "https://huggingface.co/m-a-p/SheetSage2/resolve/eab522a8168e8b8b8c4856bf8609cd86198f01fe/THIRD_PARTY_NOTICES.md",
+      "bytes": 589,
+      "sha256": null,
+      "git_sha1": "d7f9bf8726ca519dc86a42f5464d47fa91354bb4"
+    },
+    {
+      "path": "models/sheetsage2/__init__.py",
+      "url": "https://huggingface.co/m-a-p/SheetSage2/resolve/eab522a8168e8b8b8c4856bf8609cd86198f01fe/__init__.py",
+      "bytes": 39,
+      "sha256": null,
+      "git_sha1": "534c8db9ea190d93c0fd41b7b683cd516988b7c3"
+    },
+    {
+      "path": "models/sheetsage2/audio_sheetsage2.py",
+      "url": "https://huggingface.co/m-a-p/SheetSage2/resolve/eab522a8168e8b8b8c4856bf8609cd86198f01fe/audio_sheetsage2.py",
+      "bytes": 4289,
+      "sha256": null,
+      "git_sha1": "264af19012fc986101c17ff002bb6ba5310f14ea"
+    },
+    {
+      "path": "models/sheetsage2/config.json",
+      "url": "https://huggingface.co/m-a-p/SheetSage2/resolve/eab522a8168e8b8b8c4856bf8609cd86198f01fe/config.json",
+      "bytes": 2060,
+      "sha256": null,
+      "git_sha1": "e8eb3dc877ce5dcac60b3570e343634e0afbc44e"
+    },
+    {
+      "path": "models/sheetsage2/configuration_mert2.py",
+      "url": "https://huggingface.co/m-a-p/SheetSage2/resolve/eab522a8168e8b8b8c4856bf8609cd86198f01fe/configuration_mert2.py",
+      "bytes": 3860,
+      "sha256": null,
+      "git_sha1": "f07208f8a08b8743d47026956c622eaa062d6963"
+    },
+    {
+      "path": "models/sheetsage2/configuration_sheetsage2.py",
+      "url": "https://huggingface.co/m-a-p/SheetSage2/resolve/eab522a8168e8b8b8c4856bf8609cd86198f01fe/configuration_sheetsage2.py",
+      "bytes": 4119,
+      "sha256": null,
+      "git_sha1": "48b1954971c6d853a2fc641c0c69a4398f5b0ac8"
+    },
+    {
+      "path": "models/sheetsage2/durations_sheetsage2.py",
+      "url": "https://huggingface.co/m-a-p/SheetSage2/resolve/eab522a8168e8b8b8c4856bf8609cd86198f01fe/durations_sheetsage2.py",
+      "bytes": 296,
+      "sha256": null,
+      "git_sha1": "2ad9c7eabb63733502ebd8cddd94f139b61100fd"
+    },
+    {
+      "path": "models/sheetsage2/exports_sheetsage2.py",
+      "url": "https://huggingface.co/m-a-p/SheetSage2/resolve/eab522a8168e8b8b8c4856bf8609cd86198f01fe/exports_sheetsage2.py",
+      "bytes": 9820,
+      "sha256": null,
+      "git_sha1": "1d93e5482cf1daa9328d7089d5f5d9717248e734"
+    },
+    {
+      "path": "models/sheetsage2/generation_sheetsage2.py",
+      "url": "https://huggingface.co/m-a-p/SheetSage2/resolve/eab522a8168e8b8b8c4856bf8609cd86198f01fe/generation_sheetsage2.py",
+      "bytes": 24722,
+      "sha256": null,
+      "git_sha1": "da4ee0cd59f4122a1309dec7d8f58e2213de2af5"
+    },
+    {
+      "path": "models/sheetsage2/io_sheetsage2.py",
+      "url": "https://huggingface.co/m-a-p/SheetSage2/resolve/eab522a8168e8b8b8c4856bf8609cd86198f01fe/io_sheetsage2.py",
+      "bytes": 1830,
+      "sha256": null,
+      "git_sha1": "0e27cc72233ce5b029a01c6d2a5f45ed5f159be6"
+    },
+    {
+      "path": "models/sheetsage2/labels_sheetsage2.py",
+      "url": "https://huggingface.co/m-a-p/SheetSage2/resolve/eab522a8168e8b8b8c4856bf8609cd86198f01fe/labels_sheetsage2.py",
+      "bytes": 978,
+      "sha256": null,
+      "git_sha1": "879999de3642e95c6f703d7fbe85167cca5c19fa"
+    },
+    {
+      "path": "models/sheetsage2/midi_sheetsage2.py",
+      "url": "https://huggingface.co/m-a-p/SheetSage2/resolve/eab522a8168e8b8b8c4856bf8609cd86198f01fe/midi_sheetsage2.py",
+      "bytes": 4230,
+      "sha256": null,
+      "git_sha1": "7cc393644c4165b16e93c2cbe9cf5109ef6907ab"
+    },
+    {
+      "path": "models/sheetsage2/model.safetensors",
+      "url": "https://huggingface.co/m-a-p/SheetSage2/resolve/eab522a8168e8b8b8c4856bf8609cd86198f01fe/model.safetensors",
+      "bytes": 228738564,
+      "sha256": "b235f68091a5f5b644000f2b5acb57d1e70432aca2b34ab1b9cf27236e1f4274",
+      "git_sha1": null
+    },
+    {
+      "path": "models/sheetsage2/modeling_mert2.py",
+      "url": "https://huggingface.co/m-a-p/SheetSage2/resolve/eab522a8168e8b8b8c4856bf8609cd86198f01fe/modeling_mert2.py",
+      "bytes": 17081,
+      "sha256": null,
+      "git_sha1": "0369f732d561917d8d1a4d252f802ad4e23f3d4c"
+    },
+    {
+      "path": "models/sheetsage2/modeling_sheetsage2.py",
+      "url": "https://huggingface.co/m-a-p/SheetSage2/resolve/eab522a8168e8b8b8c4856bf8609cd86198f01fe/modeling_sheetsage2.py",
+      "bytes": 24602,
+      "sha256": null,
+      "git_sha1": "df5c76522f6c806ce9d46177bfab3189b4e0a241"
+    },
+    {
+      "path": "models/sheetsage2/notation_sheetsage2.py",
+      "url": "https://huggingface.co/m-a-p/SheetSage2/resolve/eab522a8168e8b8b8c4856bf8609cd86198f01fe/notation_sheetsage2.py",
+      "bytes": 55775,
+      "sha256": null,
+      "git_sha1": "a4a6da099b05e7ff956e913a6ab366d96e23f1ce"
+    },
+    {
+      "path": "models/sheetsage2/pipeline_sheetsage2.py",
+      "url": "https://huggingface.co/m-a-p/SheetSage2/resolve/eab522a8168e8b8b8c4856bf8609cd86198f01fe/pipeline_sheetsage2.py",
+      "bytes": 15022,
+      "sha256": null,
+      "git_sha1": "bdeb9da32ae4a97b8ddcc66ec9a134c3ab4a9d1c"
+    },
+    {
+      "path": "models/sheetsage2/processing_sheetsage2.py",
+      "url": "https://huggingface.co/m-a-p/SheetSage2/resolve/eab522a8168e8b8b8c4856bf8609cd86198f01fe/processing_sheetsage2.py",
+      "bytes": 5346,
+      "sha256": null,
+      "git_sha1": "5f9642f57f4e48c66002b6d5cbcdb125da84e2cd"
+    },
+    {
+      "path": "models/sheetsage2/processor_config.json",
+      "url": "https://huggingface.co/m-a-p/SheetSage2/resolve/eab522a8168e8b8b8c4856bf8609cd86198f01fe/processor_config.json",
+      "bytes": 277,
+      "sha256": null,
+      "git_sha1": "8dbba2cc459657bf4f17e1c684bd41c636e4e24f"
+    },
+    {
+      "path": "models/sheetsage2/requirements-render.txt",
+      "url": "https://huggingface.co/m-a-p/SheetSage2/resolve/eab522a8168e8b8b8c4856bf8609cd86198f01fe/requirements-render.txt",
+      "bytes": 58,
+      "sha256": null,
+      "git_sha1": "62924031791cb03af9f3dc115d216f8a64a07dc1"
+    },
+    {
+      "path": "models/sheetsage2/requirements.txt",
+      "url": "https://huggingface.co/m-a-p/SheetSage2/resolve/eab522a8168e8b8b8c4856bf8609cd86198f01fe/requirements.txt",
+      "bytes": 190,
+      "sha256": null,
+      "git_sha1": "641a1f9495a5be42a9afe699c89deec5e0508e47"
+    },
+    {
+      "path": "models/sheetsage2/schema_sheetsage2.py",
+      "url": "https://huggingface.co/m-a-p/SheetSage2/resolve/eab522a8168e8b8b8c4856bf8609cd86198f01fe/schema_sheetsage2.py",
+      "bytes": 3893,
+      "sha256": null,
+      "git_sha1": "a8b21fcd28098af1bee0894f6de4f81ab32ec007"
+    },
+    {
+      "path": "models/sheetsage2/tensors_sheetsage2.py",
+      "url": "https://huggingface.co/m-a-p/SheetSage2/resolve/eab522a8168e8b8b8c4856bf8609cd86198f01fe/tensors_sheetsage2.py",
+      "bytes": 4645,
+      "sha256": null,
+      "git_sha1": "aff5b3dff79c21fd26e7674cf7421d65aad764c4"
+    },
+    {
+      "path": "models/sheetsage2/tokenization_sheetsage2.py",
+      "url": "https://huggingface.co/m-a-p/SheetSage2/resolve/eab522a8168e8b8b8c4856bf8609cd86198f01fe/tokenization_sheetsage2.py",
+      "bytes": 29913,
+      "sha256": null,
+      "git_sha1": "035733048267e60ddb7c8dbc828e1a217492c49d"
+    },
+    {
+      "path": "models/sheetsage2/mert/LICENSE",
+      "url": "https://huggingface.co/m-a-p/MERT-v2-FullSong/resolve/d8ba1c745e733b3908ce6ad16ebeb17ac7600a42/LICENSE",
+      "bytes": 20000,
+      "sha256": null,
+      "git_sha1": "ce18e5ba29e6ad24f24b0bfaa4a682a6cf824ff6"
+    },
+    {
+      "path": "models/sheetsage2/mert/THIRD_PARTY_NOTICES.md",
+      "url": "https://huggingface.co/m-a-p/MERT-v2-FullSong/resolve/d8ba1c745e733b3908ce6ad16ebeb17ac7600a42/THIRD_PARTY_NOTICES.md",
+      "bytes": 541,
+      "sha256": null,
+      "git_sha1": "b330a93214b6516f4721fa91521332383484a1f0"
+    },
+    {
+      "path": "models/sheetsage2/mert/config.json",
+      "url": "https://huggingface.co/m-a-p/MERT-v2-FullSong/resolve/d8ba1c745e733b3908ce6ad16ebeb17ac7600a42/config.json",
+      "bytes": 882,
+      "sha256": null,
+      "git_sha1": "e6adbdaf587c162a7d1e03a252372f90ce0efe8f"
+    },
+    {
+      "path": "models/sheetsage2/mert/configuration_mert2.py",
+      "url": "https://huggingface.co/m-a-p/MERT-v2-FullSong/resolve/d8ba1c745e733b3908ce6ad16ebeb17ac7600a42/configuration_mert2.py",
+      "bytes": 3860,
+      "sha256": null,
+      "git_sha1": "f07208f8a08b8743d47026956c622eaa062d6963"
+    },
+    {
+      "path": "models/sheetsage2/mert/model.safetensors",
+      "url": "https://huggingface.co/m-a-p/MERT-v2-FullSong/resolve/d8ba1c745e733b3908ce6ad16ebeb17ac7600a42/model.safetensors",
+      "bytes": 2529812848,
+      "sha256": "e6dd2ab187d6dd62b6521cd7d8f932e237acf0c5757745a7232082e28391350d",
+      "git_sha1": null
+    },
+    {
+      "path": "models/sheetsage2/mert/modeling_mert2.py",
+      "url": "https://huggingface.co/m-a-p/MERT-v2-FullSong/resolve/d8ba1c745e733b3908ce6ad16ebeb17ac7600a42/modeling_mert2.py",
+      "bytes": 17081,
+      "sha256": null,
+      "git_sha1": "0369f732d561917d8d1a4d252f802ad4e23f3d4c"
+    },
+    {
+      "path": "models/sheetsage2/mert/preprocessor_config.json",
+      "url": "https://huggingface.co/m-a-p/MERT-v2-FullSong/resolve/d8ba1c745e733b3908ce6ad16ebeb17ac7600a42/preprocessor_config.json",
+      "bytes": 215,
+      "sha256": null,
+      "git_sha1": "54daaeee6f791c77a0057800b1ec1da60190cfb6"
+    },
+    {
+      "path": "models/sheetsage2/mert/weights_manifest.json",
+      "url": "https://huggingface.co/m-a-p/MERT-v2-FullSong/resolve/d8ba1c745e733b3908ce6ad16ebeb17ac7600a42/weights_manifest.json",
+      "bytes": 241,
+      "sha256": null,
+      "git_sha1": "1b7d41ec8430dea4fa6f29e4c146a7cb99f12895"
+    }
   ]
 }

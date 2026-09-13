@@ -35,9 +35,6 @@ TRAIT_KEYS = (
 )
 SLOT_KEYS = ("female", "male", "backing")
 
-_VOCAL_HEADING = re.compile(r"(?im)^\s*(?:#{1,6}\s*)?Vocal Details\s*:?\s*$")
-_ARRANGEMENT_HEADING = re.compile(r"(?im)^\s*(?:#{1,6}\s*)?Arrangement\s*:?\s*$")
-
 _DEFAULTS: list[dict[str, Any]] = [
     {
         "id": "voice-clear-alto",
@@ -718,43 +715,27 @@ def lyric_assignments(lyrics: str, assigned: dict[str, dict[str, Any]]) -> list[
 
 
 def compile_vocal_block(assigned: dict[str, dict[str, Any]], lyrics: str = "") -> dict[str, Any] | None:
+    """Compact YuE2 style fragment. No MiniMax Vocal Details headings."""
     if not assigned:
         return None
     female = assigned.get("female")
     male = assigned.get("male")
     backing = assigned.get("backing")
-    singers: list[str] = []
+    parts: list[str] = []
     if female:
-        singers.append(f"Singer A (Female), {expand_profile(female)}")
+        parts.append(f"Singer A (Female), {expand_profile(female)}")
     if male:
         label = "Singer B (Male)" if female else "Singer A (Male)"
-        singers.append(f"{label}, {expand_profile(male)}")
-    if not singers:
-        # Backing-only still needs an identified lead placeholder.
-        singers.append("Singer A, an explicitly identified lead vocalist whose timbre suits the requested genre")
-    deliveries = [expand_profile(item) for key, item in assigned.items() if key != "backing" and item.get("delivery")]
-    if not deliveries:
-        deliveries = [str((female or male or {}).get("delivery") or "clearly pitched melodic singing")]
-    backing_text = (
-        expand_profile(backing)
-        if backing
-        else "Keep every named singer sonically distinct. Supporting voices enter only in the sections described, and never replace the principal melody unless explicitly requested."
-    )
-    effects = [str(item.get("effects") or "").strip() for item in assigned.values() if str(item.get("effects") or "").strip()]
-    fx_text = "; ".join(effects) if effects else "Keep effects subordinate to diction and performance"
+        parts.append(f"{label}, {expand_profile(male)}")
+    if not parts:
+        parts.append("a clearly identified lead vocalist whose timbre suits the requested genre")
+    if backing:
+        parts.append(f"backing vocals, {expand_profile(backing)}")
+    elif female and male:
+        parts.append("keep the two leads distinct, no choir blend")
     assignments = lyric_assignments(lyrics, assigned)
-    assignment_line = ""
-    if assignments:
-        assignment_line = "Section Performance and Singer Assignments: " + "; ".join(assignments) + "."
-    block = "\n".join(
-        [
-            f"Vocal Gender & Timbre: {' '.join(sentence + ('' if sentence.endswith('.') else '.') for sentence in singers)}",
-            f"Vocal Style: {deliveries[0].rstrip('.')}.",
-            f"Harmony/Backing Vocals: {backing_text.rstrip('.')}.",
-            f"Vocal FX: {fx_text.rstrip('.')}.",
-            *([assignment_line] if assignment_line else []),
-        ]
-    )
+    parts.extend(assignments)
+    block = ", ".join(part.strip(" .,") for part in parts if str(part).strip())
     snapshots = []
     for slot, profile in assigned.items():
         snap = {key: profile.get(key, "") for key in _blank_profile()}
@@ -763,44 +744,39 @@ def compile_vocal_block(assigned: dict[str, dict[str, Any]], lyrics: str = "") -
     return {"block": block, "assignments": assignments, "snapshots": snapshots}
 
 
-INSTRUMENTAL_VOCAL_BLOCK = (
-    "Vocal Gender & Timbre: Instrumental composition; no sung, spoken, chanted, sampled, hummed, or vocal-chop human voice. "
-    "The principal melodic instrument named in the arrangement occupies the lead role.\n"
-    "Vocal Style: Not applicable; keep the music fully instrumental.\n"
-    "Harmony/Backing Vocals: None.\n"
-    "Vocal FX: None."
-)
 INSTRUMENTAL_BAN = (
-    "Fully instrumental. No singing, speech, humming, choir, or vocal chops. "
-    "Write a complete track with a beginning, development, and ending, about 2 to 4 minutes — not a sting, loop, or short intro."
+    "instrumental, no vocals, no humming, no vocables, no oohs, no aahs, "
+    "no choir, no rap, no vocal chops, lead instrument only"
 )
+
+
+def _compact_style(text: str, *, keep_vocal_fields: bool = True) -> str:
+    try:
+        from main import flatten_style
+        return flatten_style(text, keep_vocal_fields=keep_vocal_fields)
+    except Exception:
+        return re.sub(r"\s+", " ", text or "").strip()
 
 
 def apply_instrumental_caption(description: str) -> str:
-    """Keep the user's description. Only rewrite Vocal Details when a structured caption already exists."""
-    text = (description or "").strip()
-    structured = bool(_VOCAL_HEADING.search(text) or _ARRANGEMENT_HEADING.search(text))
-    if structured:
-        text = apply_vocal_block(text, INSTRUMENTAL_VOCAL_BLOCK)
-    if INSTRUMENTAL_BAN not in text:
-        text = f"{INSTRUMENTAL_BAN}\n\n{text}" if text else INSTRUMENTAL_BAN
-    return text
+    """Prefix the official instrumental lock. Drop leftover MiniMax singer blocks."""
+    style = re.sub(r"(?i)\bSinger [AB]\s*(?:\([^)]+\))?,?\s*", "", _compact_style(description)).strip(" ,")
+    if "instrumental" in style.casefold() and "no vocals" in style.casefold():
+        return style
+    return f"{INSTRUMENTAL_BAN}. {style}".strip(" .") if style else INSTRUMENTAL_BAN
 
 
 def apply_vocal_block(description: str, block: str) -> str:
-    """Replace or insert the Vocal Details body. Leaves the rest of the caption alone."""
-    text = (description or "").strip()
-    if not text:
-        return f"Vocal Details\n{block}"
-    vocal = _VOCAL_HEADING.search(text)
-    arrangement = _ARRANGEMENT_HEADING.search(text)
-    if vocal:
-        start = vocal.end()
-        end = arrangement.start() if arrangement and arrangement.start() > start else len(text)
-        return f"{text[:start].rstrip()}\n{block}\n\n{text[end:].lstrip()}".strip()
-    if arrangement:
-        return f"{text[:arrangement.start()].rstrip()}\n\nVocal Details\n{block}\n\n{text[arrangement.start():].lstrip()}".strip()
-    return f"{text}\n\nVocal Details\n{block}"
+    """Append a compact voice phrase to a YuE2 style line."""
+    style = _compact_style(description, keep_vocal_fields=False).rstrip(" ,")
+    phrase = (block or "").strip().rstrip(" ,")
+    if not phrase:
+        return style
+    if phrase.casefold() in style.casefold():
+        return style
+    if not style:
+        return phrase
+    return f"{style}, {phrase}"
 
 
 def compile_for_generation(
@@ -812,15 +788,16 @@ def compile_for_generation(
     normalized = normalize_slots(slots)
     assigned = resolve_assigned(normalized, snapshots)
     compiled = compile_vocal_block(assigned, lyrics)
+    style = _compact_style(description, keep_vocal_fields=not bool(compiled))
     if not compiled:
         return {
             "applied": False,
-            "description": description,
+            "description": style,
             "slots": normalized,
             "snapshots": [],
-            "preview": description,
+            "preview": style,
         }
-    preview = apply_vocal_block(description, compiled["block"])
+    preview = apply_vocal_block(style, compiled["block"])
     return {
         "applied": True,
         "description": preview,

@@ -269,7 +269,8 @@ body.embedded .back-link {
 }
 
 .swatch-grid {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+    gap: 6px;
 }
 
 .preset,
@@ -341,10 +342,11 @@ input[type="color"] {
 .swatch {
     width: 100%;
     aspect-ratio: 1;
-    border-radius: 16px;
+    border-radius: 8px;
     border: 2px solid transparent;
     background: linear-gradient(135deg, var(--swatch-a), var(--swatch-b));
     cursor: pointer;
+    min-height: 28px;
 }
 
 .swatch.active {

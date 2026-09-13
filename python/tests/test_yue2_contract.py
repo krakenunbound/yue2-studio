@@ -49,6 +49,31 @@ class YuE2ContractTests(unittest.TestCase):
         self.assertEqual((payload["cfg_scale"], payload["steps"], payload["temperature"], payload["top_k"]),
                          (1.2, 32, 1.0, 100))
 
+    def test_off_mode_uses_native_cfg_default(self):
+        request = {"description": "style", "lyrics": "words", "instrumental": False, "seed": 7,
+                   "cot_mode": "off", "cfg": 1.0, "steps": 32, "temperature": 1.0, "top_k": 100}
+        payload = yue2_engine._request_payload(request, Path("unused.wav"))
+        self.assertEqual(payload["cfg_scale"], 1.01)
+
+    def test_flatten_style_strips_minimax_headings(self):
+        style = main.flatten_style(
+            "Global Metadata\nBasic Attributes: English, warm piano pop, 88 BPM.\n"
+            "Global Emotional Progression: unhurried phrasing.\n\n"
+            "Vocal Details\nVocal Gender & Timbre: expressive female voice.\n\n"
+            "Arrangement\nInstrument Lifecycle: acoustic piano, rounded bass and light drums."
+        )
+        self.assertNotIn("Global Metadata", style)
+        self.assertIn("warm piano pop", style)
+        self.assertIn("expressive female voice", style)
+        self.assertIn("acoustic piano", style)
+
+    def test_melody_only_abc_keeps_voice_headers(self):
+        abc = 'X:1\nT:\nV: Vocal clef=treble name="Vocal Melody" snm="Vocal"\nK:C\n"Am" A2 B2 |"G" G4|\n'
+        stripped = main.melody_only_abc(abc)
+        self.assertIn('name="Vocal Melody"', stripped)
+        self.assertNotIn('"Am"', stripped)
+        self.assertNotIn('"G"', stripped)
+
     def test_model_status_requires_main_model_tokenizer_and_vae(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
@@ -66,6 +91,21 @@ class YuE2ContractTests(unittest.TestCase):
         self.assertIn("[Intro]", lyrics)
         self.assertIn("[Outro]", lyrics)
         self.assertGreaterEqual(lyrics.count("(instrumental)"), 5)
+
+    def test_prepare_moves_performance_tags_out_of_lyrics(self):
+        with patch.object(yue2_engine, "count_prompt_tokens", return_value={"tokens": 10, "maximum": 24576}):
+            prepared = main.prepare_generation_params({
+                "description": "English, warm piano pop, 88 BPM",
+                "lyrics": "[Verse]\nFour\n[Spoken Countdown]\n4, 3, 2, 1\n[Whispered]\ncome closer",
+                "instrumental": False,
+                "cot_mode": "full",
+                "voice_slots": {},
+            })
+        self.assertEqual("[Verse]\nFour\n4, 3, 2, 1\ncome closer", prepared["rendered_lyrics"])
+        self.assertNotIn("[Spoken", prepared["rendered_lyrics"])
+        self.assertIn("Spoken Countdown", prepared["generation_description"])
+        self.assertIn("Whispered", prepared["generation_description"])
+        self.assertIn("warm piano pop", prepared["generation_description"])
 
     def test_score_is_rejected_in_direct_generation_mode(self):
         with self.assertRaisesRegex(main.HTTPException, "ABC score"):

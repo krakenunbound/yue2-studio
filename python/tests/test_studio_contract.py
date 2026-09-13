@@ -302,6 +302,51 @@ class YuE2StudioContractTests(unittest.TestCase):
         self.assertIn('setLockedSeed("")', reuse)
         self.assertNotIn("setLockedSeed(String(song.seed))", reuse)
 
+    def test_remix_menu_has_obvious_choices_and_limitation_tooltip(self):
+        root = Path(__file__).resolve().parents[2]
+        app = (root / "src" / "App.tsx").read_text(encoding="utf-8")
+        form = (root / "src" / "createForm.ts").read_text(encoding="utf-8")
+        css = (root / "src" / "App.css").read_text(encoding="utf-8")
+        main = (root / "python" / "main.py").read_text(encoding="utf-8")
+        self.assertIn("Remix this song", app)
+        self.assertIn("Keep the melody", app)
+        self.assertIn("Keep melody and chords", app)
+        self.assertIn("openRemix(song)", app)
+        self.assertIn("cot_mode: remixMode", app)
+        self.assertIn("seed: null", app.split("async function startRemix", 1)[1].split("async function startLyricsSync", 1)[0])
+        self.assertIn("not the original singer, mix, or vocal take", form)
+        self.assertIn("English-like gibberish", form)
+        self.assertIn('replace(/"[^"\\n]*"/g, "")', form)
+        self.assertIn("X:|T:|M:|L:|Q:|V:|K:", form)
+        self.assertIn("title={!songHasScore(song) ? REMIX_NO_SCORE", app)
+        self.assertIn('className="menu-tip"', app)
+        self.assertIn(".remix-dialog", css)
+        self.assertIn("score.abc", main)
+        self.assertIn("has_score", main)
+
+    def test_cover_from_audio_uses_sheetsage_then_yue2(self):
+        root = Path(__file__).resolve().parents[2]
+        app = (root / "src" / "App.tsx").read_text(encoding="utf-8")
+        worker = (root / "python" / "sheetsage_worker.py").read_text(encoding="utf-8")
+        engine = (root / "python" / "sheetsage.py").read_text(encoding="utf-8")
+        catalog = (root / "python" / "model_catalog.json").read_text(encoding="utf-8")
+        manager = (root / "python" / "model_manager.py").read_text(encoding="utf-8")
+        self.assertIn("Cover from audio", app)
+        self.assertIn("openAudioCover(song)", app)
+        self.assertIn("transcribeCover", app)
+        self.assertIn("local_files_only=True", worker)
+        self.assertIn("base_model_path", worker)
+        self.assertIn("prepare_local_parent", engine)
+        transcribe = (root / "python" / "main.py").read_text(encoding="utf-8").split("def transcribe_cover_score", 1)[1].split("@app.get(\"/api/library/{folder}/score\")", 1)[0]
+        self.assertIn("yue2_engine.unload()", transcribe)
+        self.assertIn('["queued", "running"].includes(utilityJob.status)', app)
+        self.assertNotIn("createMediaStreamSource", app)
+        self.assertIn("createMediaElementSource", app)
+        self.assertIn("m-a-p/SheetSage2", catalog)
+        self.assertIn("m-a-p/MERT-v2-FullSong", catalog)
+        self.assertIn("'sheetsage':", manager)
+        self.assertNotIn("render_assets", catalog)
+
     def test_sidecar_spawn_errors_have_a_persistent_diagnostic_command(self):
         host = (Path(__file__).resolve().parents[2] / "src-tauri" / "src" / "lib.rs").read_text(encoding="utf-8")
         self.assertIn("fn sidecar_error", host)
@@ -310,9 +355,12 @@ class YuE2StudioContractTests(unittest.TestCase):
     def test_generation_controls_are_applied_to_structured_conditioning(self):
         app = (Path(__file__).resolve().parents[2] / "src" / "App.tsx").read_text(encoding="utf-8")
         self.assertIn("function applyDescriptionControls", app)
-        self.assertIn("Principal Lead Gender Override", app)
-        self.assertIn("User Exclusions", app)
+        self.assertIn("function buildStylePrompt", app)
+        self.assertIn("${gender} voice", app)
+        self.assertIn("no ${no}", app)
         self.assertIn("instrumental: true", app)
+        self.assertNotIn("Principal Lead Gender Override", app)
+        self.assertNotIn("Global Metadata", app.split("const STYLE_PRESETS", 1)[0])
 
     def test_more_options_uses_a_real_control_icon_and_animated_chevron(self):
         root = Path(__file__).resolve().parents[2]

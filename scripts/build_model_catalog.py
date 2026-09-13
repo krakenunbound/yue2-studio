@@ -5,7 +5,7 @@ from pathlib import Path
 import httpx
 
 ROOT = Path(__file__).resolve().parents[1]
-files = {key: [] for key in ('yue2', 'whisper', 'cover_art', 'stems', 'sound_effects')}
+files = {key: [] for key in ('yue2', 'whisper', 'cover_art', 'stems', 'sound_effects', 'sheetsage')}
 
 def repo(key, name, destination, select):
     response = httpx.get(f'https://huggingface.co/api/models/{name}', params={'blobs': 'true'}, follow_redirects=True, timeout=30)
@@ -25,6 +25,8 @@ repo('yue2', 'm-a-p/YuE2-Vae', 'models/YuE2-Vae', lambda n: n in {'config.json',
 repo('whisper', 'dropbox-dash/faster-whisper-large-v3-turbo', 'models/lyrics/whisper-large-v3-turbo', lambda n: n.endswith(('.bin','.json')))
 repo('sound_effects', 'stabilityai/stable-audio-3-small-sfx', 'models/sound_effects/stable-audio-3-small-sfx', lambda n: n.endswith(('.safetensors','.json','.model')) or n in {'LICENSE.md','LICENSE_GEMMA.md','NOTICE'})
 repo('cover_art', 'stable-diffusion-v1-5/stable-diffusion-v1-5', 'models/cover_art/sd15-config', lambda n: n.endswith('.json') or n=='tokenizer/merges.txt')
+repo('sheetsage', 'm-a-p/SheetSage2', 'models/sheetsage2', lambda n: n.endswith('.py') and n not in {'infer.py','render.py','setup_render.py','rendering_sheetsage2.py'} or n in {'LICENSE','THIRD_PARTY_NOTICES.md','config.json','processor_config.json','model.safetensors','requirements.txt'})
+repo('sheetsage', 'm-a-p/MERT-v2-FullSong', 'models/sheetsage2/mert', lambda n: n in {'LICENSE','THIRD_PARTY_NOTICES.md','config.json','model.safetensors','preprocessor_config.json','configuration_mert2.py','modeling_mert2.py','weights_manifest.json'})
 
 def local_identity(key, path, url):
     source = ROOT / path
