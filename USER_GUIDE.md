@@ -86,7 +86,7 @@ Keep the first test short. Save settings and a seed when offered if you want a m
 
 ## Library: organizing finished work
 
-Library is the main list of songs and exported Studio mixes. Play a result and use its **More actions** menu for editing details, reusing it as a new song, opening Studio, artwork, video, stems, lyrics tools and downloads where available.
+Library is the main list of songs and exported Studio mixes. Click the cover **play** control to hear a result through the desktop player. When generation finishes, the banner reads **Song ready** and then clears; the elapsed time stops. Use the song's **More actions** menu for editing details, reusing it as a new song, opening Studio, artwork, video, stems, lyrics tools and downloads where available.
 
 - **Edit song details** changes the saved description, title or lyrics. Changing text does not regenerate the recording.
 - **Reuse as new song** starts another generation from saved information; it does not replace the original audio.
@@ -216,6 +216,8 @@ Cloud actions send the relevant request text to the configured provider and can 
 | Sound effect is noisy or distorted | Try a simple prompt, default sampler/settings and a new seed. Compare one variable at a time. Check levels and processing in Studio. Prompt enhancement or extra steps can make results worse. |
 | Woosh Steps slider is disabled | DOPRI5 is adaptive. Select Euler only if you want to experiment with a fixed step count. |
 | Effect only in one ear | Use 0.5.0 or later, restart after updating, and check clip left/right gains and placement. Imported mono audio should be centered without a special effect. |
+| Library play is silent or stalls | Close the app and launch the current `YuE2 Studio.exe` (0.6.1 or later). Playback uses the native player, not Web Audio. |
+| “Song ready” banner keeps counting | Same update: finished jobs freeze elapsed time and the banner clears. The song is already in the list. |
 | Edits missing in Library playback | Save the Studio session, then Export custom mix. Play the new Studio Mix entry. |
 | Added sounds missing from export | Use custom mix, check mute/solo, timeline placement and export range. Quick stem exports omit imported sounds. |
 | Lyrics are absent or mistimed | Check the lyric text/language, install Whisper and run sync. A text rewrite cannot change what was actually sung. |

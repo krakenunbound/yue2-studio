@@ -61,6 +61,7 @@ YuE2 Studio uses the published YuE2-3B inference package and model. Each model d
 ## New in 0.6.1
 
 - SheetSage2 install no longer fails after it rewrites `config.json` to use the local MERT encoder. Already-downloaded weights are kept.
+- Library play uses the native audio element. The Song ready banner freezes elapsed time and then clears.
 
 ## New in 0.6.0
 
