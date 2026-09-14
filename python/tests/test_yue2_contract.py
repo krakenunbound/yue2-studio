@@ -114,9 +114,15 @@ class YuE2ContractTests(unittest.TestCase):
                 "cot_mode": "off", "abc_score": "X:1", "voice_slots": {},
             })
 
-    def test_windows_worker_uses_eager_backend_without_flash_attention_graphs(self):
-        worker = (Path(__file__).resolve().parents[1] / "yue2_worker.py").read_text(encoding="utf-8")
-        self.assertIn('backend="torch-eager"', worker)
+    def test_windows_worker_uses_cuda_graphs_with_cudnn_attention(self):
+        root = Path(__file__).resolve().parents[1]
+        worker = (root / "yue2_worker.py").read_text(encoding="utf-8")
+        memory = (root / "yue2_memory.py").read_text(encoding="utf-8")
+        self.assertIn("from yue2_speed import", worker)
+        self.assertIn("select_ar_backend", worker)
+        self.assertIn("apply_speed_patches", worker)
+        self.assertIn("cudnn_attention", memory)
+        self.assertNotIn('backend="torch-eager"', worker.split("except Exception")[0])
 
 
 if __name__ == "__main__":

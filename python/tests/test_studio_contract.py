@@ -14,6 +14,44 @@ import cover_art
 
 
 class YuE2StudioContractTests(unittest.TestCase):
+    def test_lan_access_is_optional_and_browser_uses_page_origin(self):
+        root = Path(__file__).resolve().parents[2]
+        api = (root / "src" / "api.ts").read_text(encoding="utf-8")
+        app = (root / "src" / "App.tsx").read_text(encoding="utf-8")
+        main = (root / "python" / "main.py").read_text(encoding="utf-8")
+        self.assertIn("window.location.origin", api)
+        self.assertIn('credentials: "include"', api)
+        self.assertIn("LAN ACCESS", app)
+        self.assertIn("Start LAN sharing", app)
+        self.assertNotIn("LAN password", app)
+        self.assertIn('host="0.0.0.0"', main)
+        self.assertIn("LAN_PORT", main)
+        self.assertIn("serve_lan", main)
+        self.assertIn("lan_access.gate", main)
+        self.assertIn("StaticFiles", main)
+        self.assertIn("LAN_PORT = 6969", (root / "python" / "config.py").read_text(encoding="utf-8"))
+
+    def test_new_playlist_from_song_menu_keeps_that_song(self):
+        app = (Path(__file__).resolve().parents[2] / "src" / "App.tsx").read_text(encoding="utf-8")
+        self.assertIn("setCollectionSeedSong(song)", app)
+        create = app.split("async function saveCollection", 1)[1].split("async function addToPlaylist", 1)[0]
+        self.assertIn("collectionSeedSong", create)
+        self.assertIn("addSongToPlaylist(playlist.id, song.id)", create)
+
+    def test_radio_station_is_a_top_mode_with_eq(self):
+        root = Path(__file__).resolve().parents[2]
+        app = (root / "src" / "App.tsx").read_text(encoding="utf-8")
+        radio = (root / "src" / "RadioPage.tsx").read_text(encoding="utf-8")
+        self.assertIn(">Radio<", app)
+        self.assertIn('studioView === "radio"', app)
+        self.assertIn("RadioPage", app)
+        self.assertIn("function radioSrc", radio)
+        self.assertIn("function startTrack", radio)
+        self.assertIn("toggleLibraryPlay", app)
+        self.assertIn("BANDS = [32, 64, 125, 250, 500, 1000, 2000, 4000, 8000, 16000]", radio)
+        self.assertIn("Shuffle", radio)
+        self.assertIn("Repeat", radio)
+
     def test_finished_jobs_freeze_elapsed_time(self):
         app = (Path(__file__).resolve().parents[2] / "src" / "App.tsx").read_text(encoding="utf-8")
         css = (Path(__file__).resolve().parents[2] / "src" / "App.css").read_text(encoding="utf-8")
@@ -21,8 +59,7 @@ class YuE2StudioContractTests(unittest.TestCase):
         self.assertIn("finished_at", elapsed)
         self.assertIn('generationJob?.status !== "succeeded"', app)
         self.assertNotIn("createMediaElementSource", app)
-        self.assertIn("element.play()", app)
-        self.assertIn("autoPlay", app)
+        self.assertIn("toggleLibraryPlay", app)
         self.assertIn(".job-banner.succeeded span", css)
 
     def test_instrumental_generation_uses_multi_section_conditioning(self):
@@ -106,7 +143,8 @@ class YuE2StudioContractTests(unittest.TestCase):
         self.assertIn('"top_k": int(request.get("top_k", 100))', engine)
         self.assertIn('"temperature": float(request.get("temperature", 1.0))', engine)
         self.assertIn('"abc": request.get("abc_score") or None', engine)
-        self.assertIn('backend="torch-eager"', worker)
+        self.assertIn("select_ar_backend", worker)
+        self.assertIn("from yue2_speed import", worker)
 
     def test_cover_renderer_has_anatomy_guard_and_step_progress(self):
         root = Path(__file__).resolve().parents[1]

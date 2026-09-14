@@ -70,7 +70,7 @@ def runtime_status() -> dict:
     package = WORKER_PYTHON.parent.parent / "Lib" / "site-packages" / "yue2"
     return {"ready": WORKER_PYTHON.is_file() and package.is_dir(), "python": str(WORKER_PYTHON),
             "package": str(package),
-            "worker_loaded": _alive(), "standalone": True, "backend": "torch-eager"}
+            "worker_loaded": _alive(), "standalone": True, "backend": "torch"}
 
 
 def _env() -> dict[str, str]:

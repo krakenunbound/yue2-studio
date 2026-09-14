@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 
 let cachedBase: string | null = null;
 async function base(): Promise<string> {
+  if (!("__TAURI_INTERNALS__" in window)) return window.location.origin;
   if (cachedBase) return cachedBase;
   try { cachedBase = await invoke<string>("sidecar_url"); }
   catch { cachedBase = "http://127.0.0.1:7794"; }
@@ -50,7 +51,7 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const url = (await base()) + path;
   let response: Response;
   try {
-    response = await fetch(url, options);
+    response = await fetch(url, { ...options, credentials: "include" });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     throw new Error(`Studio could not call ${url} (${message})`);
@@ -99,7 +100,7 @@ export type VoiceProfile = {
   built_in: boolean; archived: boolean; created_at?: string; updated_at?: string; slot?: string;
 };
 export type VoiceCompileResult = { applied: boolean; description: string; preview: string; slots: VoiceSlots; snapshots: VoiceProfile[]; assignments?: string[] };
-export type Song = { id: string; title: string; artist?: string; album?: string; genre?: string; year?: string; track_number?: string; description: string; lyrics: string; english_translation?: string; lyrics_language?: string; timed_lyrics?: TimedLyrics | null; instrumental: boolean; seed: number | null; duration?: number; steps?: number; cfg?: number; top_k?: number; temperature?: number; cot_mode?: "full" | "melody" | "off"; abc_score?: string; has_score?: boolean; exclude_styles?: string; vocal_gender?: "auto" | "female" | "male"; prompt_tokens?: number; voice_slots?: VoiceSlots; voice_snapshots?: VoiceProfile[]; audio_url: string; original_audio_url?: string | null; cover_url?: string | null; cover_error?: string | null; stems?: string[]; studio?: StudioSession; studio_imports?: StudioImport[]; studio_mixes?: { file: string; variant: string; created_at: string }[]; created_at: string; folder: string; folder_name: string };
+export type Song = { id: string; title: string; artist?: string; album?: string; genre?: string; year?: string; track_number?: string; description: string; lyrics: string; english_translation?: string; lyrics_language?: string; timed_lyrics?: TimedLyrics | null; instrumental: boolean; seed: number | null; duration?: number; steps?: number; cfg?: number; top_k?: number; temperature?: number; cot_mode?: "full" | "melody" | "off"; abc_score?: string; has_score?: boolean; audio?: string; exclude_styles?: string; vocal_gender?: "auto" | "female" | "male"; prompt_tokens?: number; voice_slots?: VoiceSlots; voice_snapshots?: VoiceProfile[]; audio_url: string; original_audio_url?: string | null; cover_url?: string | null; cover_error?: string | null; stems?: string[]; studio?: StudioSession; studio_imports?: StudioImport[]; studio_mixes?: { file: string; variant: string; created_at: string }[]; created_at: string; folder: string; folder_name: string };
 export type AiCapabilityStatus = { configured: boolean; enabled: boolean; provider: string };
 export type AiProviderPublic = { label: string; configured: boolean; last4: string | null; updated_at: string | null };
 export type AiCapabilityState = { enabled: boolean; provider: string; model: string };
@@ -181,6 +182,9 @@ export const cancelJob = (id: string) => request<{ status: string }>(`/api/jobs/
 export const getLogs = (since?: number) => request<{ items: LogEntry[]; last_id: number; reset?: boolean }>(`/api/logs?limit=800${since == null ? "" : `&since_id=${since}`}`);
 export const clearLogs = () => request<{ cleared: boolean }>("/api/logs/clear", { method: "POST" });
 export const openOutputs = () => request<{ path: string }>("/api/open-outputs", { method: "POST" });
+export type LanStatus = { enabled: boolean; ui_ready: boolean; urls: string[]; local: boolean; needs_login: boolean; port: number };
+export const getLanStatus = () => request<LanStatus>("/api/lan/status");
+export const saveLanSettings = (body: { enabled?: boolean }) => request<LanStatus>("/api/lan/settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 export async function audioUrl(path: string): Promise<string> { return (await base()) + path; }
 export async function downloadUrl(path: string): Promise<string> { return (await base()) + path; }
 export async function videoStudioUrl(song: Song, workspace: string): Promise<string> {

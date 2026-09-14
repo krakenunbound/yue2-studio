@@ -41,6 +41,9 @@ def forwarding():
     assert args==(model,plan.prefix,semantic.tokens,12)
     assert kwargs['steps']==32 and kwargs['context']==24576
     assert kwargs['query_chunk_size']==256 and kwargs['cancelled'] is cancel and kwargs['on_progress'] is progress
+    with patch('yue2.nar.synthesize',return_value=torch.zeros(9000,64)) as solver:
+        synthesize_bounded(pipe,semantic,cancelled=cancel,on_progress=progress,budget_gb=21.6)
+    assert solver.call_args.kwargs['query_chunk_size']==1024
     assert result.shape==(9000,64)
     semantic.plan.prefix=[99]
     with patch('yue2.nar.synthesize') as solver:

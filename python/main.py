@@ -17,12 +17,12 @@ from urllib.parse import quote
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from config import LIBRARY_ROOT, LOGS_ROOT, OUTPUTS_ROOT, SIDECAR_HOST, SIDECAR_PORT
+from config import LAN_PORT, LIBRARY_ROOT, LOGS_ROOT, OUTPUTS_ROOT, SIDECAR_HOST, SIDECAR_PORT
 from jobs import Job, manager
 from log_buffer import install, ring
 import yue2_engine
@@ -36,10 +36,19 @@ import ai_assist
 import caption_library
 import voice_profiles
 import model_manager
+import lan_access
 
 install(LOGS_ROOT)
 log = logging.getLogger("yue2.studio")
-app = FastAPI(title="YuE2 Studio", version="0.6.1")
+app = FastAPI(title="YuE2 Studio", version="0.6.2")
+
+
+@app.middleware("http")
+async def protect_lan(request: Request, call_next):
+    blocked = lan_access.gate(request)
+    if blocked is not None:
+        return blocked
+    return await call_next(request)
 
 
 @app.middleware("http")
@@ -1078,6 +1087,22 @@ def inference_status() -> dict:
     else:
         detail = "Standalone single-GPU YuE2 engine ready"
     return {"online": online, "url": "local worker", "detail": detail, **runtime}
+
+
+class LanUpdateRequest(BaseModel):
+    enabled: bool | None = None
+
+
+@app.get("/api/lan/status")
+def lan_status(request: Request):
+    return lan_access.status(request)
+
+
+@app.post("/api/lan/settings")
+def lan_settings(request: Request, payload: LanUpdateRequest):
+    if not lan_access.is_local(request):
+        raise HTTPException(403, "Change LAN settings on the studio PC.")
+    return lan_access.update(enabled=payload.enabled)
 
 
 @app.get("/health")
@@ -2387,6 +2412,15 @@ def open_outputs():
 
 atexit.register(yue2_engine.unload)
 
+if lan_access.DIST_ROOT.is_dir():
+    app.mount("/", StaticFiles(directory=str(lan_access.DIST_ROOT), html=True), name="lan-ui")
+
+
+def serve_lan():
+    uvicorn.run(app, host="0.0.0.0", port=LAN_PORT, log_level="warning")
+
+
 if __name__ == "__main__":
     OUTPUTS_ROOT.mkdir(parents=True, exist_ok=True)
+    threading.Thread(target=serve_lan, daemon=True, name="lan-ui").start()
     uvicorn.run(app, host=SIDECAR_HOST, port=SIDECAR_PORT, log_level="info")

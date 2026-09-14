@@ -1,6 +1,6 @@
 # YuE2 Studio user guide
 
-For version 0.6.1. Start with the quick start, then use the section for the task you want to do. The README gallery uses older screenshots; some controls have changed. Release notes: [CHANGELOG.md](CHANGELOG.md).
+For version 0.6.2. Start with the quick start, then use the section for the task you want to do. The README gallery uses older screenshots; some controls have changed. Release notes: [CHANGELOG.md](CHANGELOG.md).
 
 ## Contents
 
@@ -21,7 +21,7 @@ For version 0.6.1. Start with the quick start, then use the section for the task
 1. Install the Windows release in a folder you can write to. Launch YuE2 Studio from its shortcut or executable.
 2. Open **Models**. Install **YuE2 music generation** if you want songs. Install only the optional features you need. Wait for setup to finish before generating.
 3. In **Create**, start with a short, straightforward idea and a supplied style/template. Review the description and lyrics before generating. Use instrumental mode for music without vocals.
-4. Watch the job's phase and elapsed time. The stages have different speeds; 70% does not necessarily mean 70% of the time has passed.
+4. Watch the job's phase and elapsed time. The stages have different speeds; 70% does not necessarily mean 70% of the time has passed. Planning and semantic tokens run one token at a time, so the GPU can sit near 100% with several GB of VRAM still free. Acoustic synthesis is the heavy parallel step. Official “about a minute on a 4090” figures assume Linux FlashAttention; this Windows app uses cuDNN attention and CUDA graphs instead. After a speed update, use **Clear VRAM** or restart so the worker reloads.
 5. Play the completed result in **Library**. Keep a result you like before experimenting further.
 6. For sound effects, install Woosh or Stable Audio, then open **Effects**. For Woosh, try `pouring a cup of coffee` with default settings and no prompt enhancement first.
 7. To arrange sounds with a song, choose **Send effects to**, click **Add to Studio**, and open that song in **Studio**. Move the sound clip to the desired time, save the session, and export a custom mix.
@@ -94,6 +94,10 @@ Library is the main list of songs and exported Studio mixes. Click the cover **p
 - **Cover from audio** uses SheetSage2 to transcribe the recording, then YuE2 re-sings it. Review the ABC before generating. Install SheetSage2 in Models first. This is not a mix remix of the original vocal take.
 - **Playlists** collect songs for listening. **Workspaces** help organize separate bodies of work.
 - **Studio Projects** provides access to saved editing work.
+
+## Radio: listen like a station
+
+**Radio** is a built-in player for songs you already made. Pick **All songs**, a **playlist**, or a **workspace**. Controls include play/pause, previous/next, seek, volume, shuffle and repeat (off / all / one). A 10-band EQ with presets (Flat, Bass, Treble, Vocal, Electronic, Rock, Jazz, Acoustic, Night, Loudness) is saved on this machine. Radio does not generate music; it only plays the library.
 - **Open song folder** exposes the actual files for backup or use elsewhere.
 
 Use descriptive song and effect names. Names are easier to recognize than the opening words of a long prompt. Before deleting a song, make sure it is not your only copy of a take or arrangement you want.
@@ -202,6 +206,10 @@ Cloud actions send the relevant request text to the configured provider and can 
 
 **Job** shows the current task, phase, progress and cancellation. Elapsed time remains visible; a remaining-time estimate is shown only when one is available. A phase can take time without the percentage moving smoothly.
 
+## LAN access from another computer
+
+The desktop app is unchanged and still uses local port 7794. On the studio PC open **System** and turn on **LAN sharing**. Other computers on the same network can then open the listed `http://…:6969` address in a browser — no password. Models and GPU work stay on the studio PC. Allow port **6969** in Windows Firewall if Windows asks. Do not expose this to the public internet. The web UI is the production `dist` build; run `npm run build` on the studio PC if System says the web UI is not ready.
+
 **Logs** is the place to inspect installation or generation failures. When reporting a problem, include the app version, selected model, relevant settings, task phase and a short error excerpt. Review logs for private paths or prompt text before sharing. Never attach your API-key vault.
 
 ## Troubleshooting
@@ -213,6 +221,7 @@ Cloud actions send the relevant request text to the configured provider and can 
 | Download fails with access denied | For gated Stable Audio, confirm publisher access and the correct Hugging Face read token. For public models, check the connection and retry. |
 | Not enough disk space | Free space on the app's drive. Downloads and extraction need more room than the final weights alone. |
 | GPU out of memory | Stop other GPU work, try a shorter/smaller job and restart the app after a failed task. Read the logged error. Model file size alone is not the memory requirement. |
+| A song takes 15–20 minutes | Restart or **Clear VRAM** so the worker loads cuDNN attention and CUDA graphs. GPU at 100% with ~10 GB free during planning is normal. Linux/WSL2 FlashAttention is optional, not required for Studio. |
 | Sound effect is noisy or distorted | Try a simple prompt, default sampler/settings and a new seed. Compare one variable at a time. Check levels and processing in Studio. Prompt enhancement or extra steps can make results worse. |
 | Woosh Steps slider is disabled | DOPRI5 is adaptive. Select Euler only if you want to experiment with a fixed step count. |
 | Effect only in one ear | Use 0.5.0 or later, restart after updating, and check clip left/right gains and placement. Imported mono audio should be centered without a special effect. |

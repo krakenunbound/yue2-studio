@@ -34,10 +34,11 @@ import KeysDrawer from "./KeysDrawer";
 import SongStudio from "./SongStudio";
 import EffectsPage from "./EffectsPage";
 import ModelsPage from "./ModelsPage";
+import RadioPage from "./RadioPage";
 import VoiceProfilesPanel from "./VoiceProfilesPanel";
 import { COVER_LIMITS, coverTitleFor, DEFAULT_LYRICS, EMPTY_VOICE_SLOTS, defaultCreateForm, isCreateFormDirty, melodyOnlyAbc, needsAutoTitle, REMIX_LIMITS, REMIX_NO_SCORE, remixTitleFor, SAMPLE_DESCRIPTION, songHasScore, type VoiceSlots } from "./createForm";
 import type { VoiceProfile } from "./voiceProfiles";
-import { addSongToPlaylist, assistChat, assistWriting, audioUrl, cancelJob, clearMemory, convertAudio, createPlaylist, createWorkspace, deletePlaylist, deleteSong, deleteWorkspace, downloadUrl, extractStems, generate, getJob, getLibrary, getPlaylists, getSongScore, getStatus, getVoiceProfiles, getWorkspaces, moveSongToWorkspace, openOutputs, openSongFolder, refreshModels, regenerateCover, removeSongFromPlaylist, saveAiKeys, synchronizeLyrics, transcribeCover, updateSong, uploadSongCover, videoStudioUrl, type ChatMessage, type Job, type Playlist, type Song, type Status, type TimedLyricLine, type TimedLyrics, type TimedWord, type Workspace } from "./api";
+import { addSongToPlaylist, assistChat, assistWriting, audioUrl, cancelJob, clearMemory, convertAudio, createPlaylist, createWorkspace, deletePlaylist, deleteSong, deleteWorkspace, downloadUrl, extractStems, generate, getJob, getLanStatus, getLibrary, getPlaylists, getSongScore, getStatus, getVoiceProfiles, getWorkspaces, moveSongToWorkspace, openOutputs, openSongFolder, refreshModels, regenerateCover, removeSongFromPlaylist, saveAiKeys, saveLanSettings, synchronizeLyrics, transcribeCover, updateSong, uploadSongCover, videoStudioUrl, type ChatMessage, type Job, type LanStatus, type Playlist, type Song, type Status, type TimedLyricLine, type TimedLyrics, type TimedWord, type Workspace } from "./api";
 
 const SAMPLE = SAMPLE_DESCRIPTION;
 const EASY_TEMPLATE_PREVIEW = 8;
@@ -452,8 +453,7 @@ function KaraokeLyrics({ lyrics, currentTime }: { lyrics?: TimedLyrics | null; c
   </section>;
 }
 
-function SongVisualizer({ src, timedLyrics, onEnded }: { src: string; timedLyrics?: TimedLyrics | null; onEnded: () => void }) {
-  const audio = useRef<HTMLAudioElement>(null);
+function SongVisualizer({ audio, timedLyrics, onEnded }: { audio: React.RefObject<HTMLAudioElement | null>; timedLyrics?: TimedLyrics | null; onEnded: () => void }) {
   const canvas = useRef<HTMLCanvasElement>(null);
   const [isPlaying, setIsPlaying] = useState(true);
   const [currentTime, setCurrentTime] = useState(0);
@@ -481,11 +481,8 @@ function SongVisualizer({ src, timedLyrics, onEnded }: { src: string; timedLyric
       }
     };
     draw();
-    const start = () => { void element.play().catch(() => undefined); };
-    if (element.readyState >= 2) start();
-    else element.addEventListener("canplay", start, { once: true });
-    return () => { element.removeEventListener("canplay", start); cancelAnimationFrame(frame); };
-  }, [src]);
+    return () => cancelAnimationFrame(frame);
+  }, [audio]);
   useEffect(() => {
     const element = audio.current; if (!element) return;
     const updateTime = () => setCurrentTime(element.currentTime || 0);
@@ -496,7 +493,7 @@ function SongVisualizer({ src, timedLyrics, onEnded }: { src: string; timedLyric
     element.addEventListener("timeupdate", updateTime); element.addEventListener("durationchange", updateDuration); element.addEventListener("loadedmetadata", updateDuration); element.addEventListener("play", playingNow); element.addEventListener("pause", pausedNow);
     animationFrame = requestAnimationFrame(followPlayback);
     return () => { cancelAnimationFrame(animationFrame); element.removeEventListener("timeupdate", updateTime); element.removeEventListener("durationchange", updateDuration); element.removeEventListener("loadedmetadata", updateDuration); element.removeEventListener("play", playingNow); element.removeEventListener("pause", pausedNow); };
-  }, [src]);
+  }, [audio]);
   const togglePlayback = () => { const element = audio.current; if (!element) return; if (element.paused) void element.play(); else element.pause(); };
   const stopPlayback = () => { const element = audio.current; if (!element) return; element.pause(); element.currentTime = 0; setCurrentTime(0); setIsPlaying(false); };
   const seek = (value: number) => { const element = audio.current; if (!element) return; element.currentTime = value; setCurrentTime(value); };
@@ -515,7 +512,6 @@ function SongVisualizer({ src, timedLyrics, onEnded }: { src: string; timedLyric
       <span className="transport-volume-icon" aria-hidden="true">VOL</span>
       <input className="transport-volume" aria-label="Volume" type="range" min="0" max="1" step="0.01" value={volume} onChange={(event) => changeVolume(Number(event.target.value))} style={{ "--volume": `${volume * 100}%` } as React.CSSProperties} />
     </div>
-    <audio ref={audio} key={src} src={src} preload="auto" autoPlay onEnded={() => { setIsPlaying(false); setCurrentTime(0); onEnded(); }} />
   </div>;
 }
 
@@ -529,6 +525,7 @@ export default function App() {
   const [activeWorkspaceId, setActiveWorkspaceId] = useState<string | null>(null);
   const [collectionDialog, setCollectionDialog] = useState<"playlist" | "workspace" | null>(null);
   const [collectionName, setCollectionName] = useState("");
+  const [collectionSeedSong, setCollectionSeedSong] = useState<Song | null>(null);
   const [title, setTitle] = useState("");
   const [artist, setArtist] = useState(() => localStorage.getItem("yue2-default-artist") || "");
   const [album, setAlbum] = useState("");
@@ -547,6 +544,7 @@ export default function App() {
   const [error, setError] = useState("");
   const [serviceReachable, setServiceReachable] = useState(true);
   const [playing, setPlaying] = useState<string | null>(null);
+  const libraryAudio = useRef<HTMLAudioElement>(null);
   const [expandedStems, setExpandedStems] = useState<string | null>(null);
   const [audioSources, setAudioSources] = useState<Record<string, string>>({});
   const [coverSources, setCoverSources] = useState<Record<string, string>>({});
@@ -587,7 +585,7 @@ export default function App() {
   const [coverKeepLyrics, setCoverKeepLyrics] = useState(true);
   const [coverSongTitle, setCoverSongTitle] = useState("");
   const [libraryBusy, setLibraryBusy] = useState(false);
-  const [studioView, setStudioView] = useState<"create" | "library" | "effects" | "models">("create");
+  const [studioView, setStudioView] = useState<"create" | "library" | "radio" | "effects" | "models">("create");
   const initialSetupChecked = useRef(false);
   const [systemOpen, setSystemOpen] = useState(false);
   const [keysOpen, setKeysOpen] = useState(false);
@@ -616,6 +614,8 @@ export default function App() {
   const [promptHelpOpen, setPromptHelpOpen] = useState(false);
   const [templatesOpen, setTemplatesOpen] = useState(false);
   const [moreOptions, setMoreOptions] = useState(false);
+  const [lan, setLan] = useState<LanStatus | null>(null);
+  const [lanBusy, setLanBusy] = useState(false);
   const [excludeStyles, setExcludeStyles] = useState("");
   const [vocalGender, setVocalGender] = useState<"auto" | "female" | "male">("auto");
   const [cfg, setCfg] = useState(1.0);
@@ -719,6 +719,7 @@ export default function App() {
         const startupError = await invoke<string | null>("sidecar_error").catch(() => null);
         if (startupError) setError(`The local YuE2 service could not start: ${startupError}`);
       }
+      void getLanStatus().then(setLan).catch(() => undefined);
       for (let i = 0; i < 40 && !stopped; i += 1) {
         try { await refresh(); return; } catch { await new Promise((resolve) => setTimeout(resolve, 500)); }
       }
@@ -1769,6 +1770,21 @@ export default function App() {
     setSelectedSongIds((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id]);
   }
 
+  function toggleLibraryPlay(song: Song) {
+    const element = libraryAudio.current;
+    if (playing === song.id) {
+      element?.pause();
+      setPlaying(null);
+      return;
+    }
+    const url = audioSources[song.id];
+    if (element && url) {
+      if (element.getAttribute("src") !== url) element.src = url;
+      void element.play().catch(() => undefined);
+    }
+    setPlaying(song.id);
+  }
+
   function selectedLibrarySongs() {
     return librarySongs.filter((song) => selectedSongIds.includes(song.id));
   }
@@ -1816,25 +1832,25 @@ export default function App() {
     setLibraryBusy(true); setError("");
     try {
       const result = collectionDialog === "playlist" ? await createPlaylist(name) : await createWorkspace(name);
+      const seeded = [
+        ...(collectionSeedSong ? [collectionSeedSong] : []),
+        ...(attachSelection ? selectedLibrarySongs() : []),
+      ].filter((song, index, list) => list.findIndex((item) => item.id === song.id) === index);
       if (collectionDialog === "playlist") {
         const playlist = (result as { playlist: Playlist }).playlist;
-        if (attachSelection) {
-          for (const song of selectedLibrarySongs()) {
-            if (!playlist.song_ids.includes(song.id)) await addSongToPlaylist(playlist.id, song.id);
-          }
+        for (const song of seeded) {
+          if (!playlist.song_ids.includes(song.id)) await addSongToPlaylist(playlist.id, song.id);
         }
         setActivePlaylistId(playlist.id); setLibrarySection("playlists");
       } else {
         const workspace = (result as { workspace: Workspace }).workspace;
-        if (attachSelection) {
-          for (const song of selectedLibrarySongs()) {
-            if (!workspace.song_ids.includes(song.id)) await moveSongToWorkspace(workspace.id, song.id);
-          }
-          setSelectedSongIds([]);
+        for (const song of seeded) {
+          if (!workspace.song_ids.includes(song.id)) await moveSongToWorkspace(workspace.id, song.id);
         }
+        if (attachSelection) setSelectedSongIds([]);
         setActiveWorkspaceId(workspace.id); setLibrarySection("workspaces");
       }
-      setCollectionDialog(null); setCollectionName(""); setAttachSelection(false); await refresh();
+      setCollectionDialog(null); setCollectionName(""); setAttachSelection(false); setCollectionSeedSong(null); await refresh();
     } catch (reason: any) { setError(reason?.message ?? String(reason)); }
     finally { setLibraryBusy(false); }
   }
@@ -1871,10 +1887,17 @@ export default function App() {
     finally { setLibraryBusy(false); }
   }
 
+  async function applyLanSettings(enabled: boolean) {
+    setLanBusy(true); setError("");
+    try { setLan(await saveLanSettings({ enabled })); }
+    catch (reason: any) { setError(reason?.message ?? String(reason)); }
+    finally { setLanBusy(false); }
+  }
+
   return <div className="app">
     <header className="topbar">
       <div className="brand"><img className="brand-logo" src={logoUrl} alt="" /><span>YuE2 Studio</span></div>
-      <nav className="top-modes" aria-label="Studio modes"><button className={studioView === "create" && !editorSong ? "active" : ""} onClick={() => setStudioView("create")}>Create</button><button className={studioView === "library" && !editorSong ? "active" : ""} onClick={() => setStudioView("library")}>Library</button><button className={studioView === "effects" && !editorSong ? "active" : ""} onClick={() => setStudioView("effects")}>Effects</button><button className={studioView === "models" && !editorSong ? "active" : ""} onClick={() => setStudioView("models")}>Models</button><button className={editorSong ? "active" : ""} onClick={() => void openStudioFromNav()}>Studio</button></nav>
+      <nav className="top-modes" aria-label="Studio modes"><button className={studioView === "create" && !editorSong ? "active" : ""} onClick={() => setStudioView("create")}>Create</button><button className={studioView === "library" && !editorSong ? "active" : ""} onClick={() => setStudioView("library")}>Library</button><button className={studioView === "radio" && !editorSong ? "active" : ""} onClick={() => { setPlaying(null); setStudioView("radio"); }}>Radio</button><button className={studioView === "effects" && !editorSong ? "active" : ""} onClick={() => setStudioView("effects")}>Effects</button><button className={studioView === "models" && !editorSong ? "active" : ""} onClick={() => setStudioView("models")}>Models</button><button className={editorSong ? "active" : ""} onClick={() => void openStudioFromNav()}>Studio</button></nav>
       <span className={`pill ${ready ? "ok" : "warn"}`}><i />{ready ? "YuE2 ready" : "engine unavailable"}</span>
       {gpu?.detected && <span className="pill ok desktop-status"><i />{gpu.name?.replace("NVIDIA GeForce ", "")}</span>}
       <span className="spacer" />
@@ -2066,7 +2089,7 @@ export default function App() {
       </section>
 
       <section className={`library-pane main-view ${studioView === "library" ? "active" : ""}`}>
-        <div className="library-head"><div><div className="eyebrow">LIBRARY</div><h2>{activePlaylist?.name ?? activeWorkspace?.name ?? (librarySection === "projects" ? "Studio Projects" : librarySection === "playlists" ? "Playlists" : librarySection === "workspaces" ? "Workspaces" : "My songs")}</h2></div><div className="library-head-actions">{(librarySection === "playlists" || librarySection === "workspaces") && <button onClick={() => { setCollectionName(""); setAttachSelection(false); setCollectionDialog(librarySection === "playlists" ? "playlist" : "workspace"); }}>+ New {librarySection === "playlists" ? "playlist" : "workspace"}</button>}{((librarySection === "playlists" && activePlaylist) || (librarySection === "workspaces" && activeWorkspace?.id !== "my-workspace")) && <button className="danger" disabled={libraryBusy} onClick={() => void removeCurrentCollection()}>Delete</button>}<span>{librarySongs.length} songs · {activeJobs} active</span></div></div>
+        <div className="library-head"><div><div className="eyebrow">LIBRARY</div><h2>{activePlaylist?.name ?? activeWorkspace?.name ?? (librarySection === "projects" ? "Studio Projects" : librarySection === "playlists" ? "Playlists" : librarySection === "workspaces" ? "Workspaces" : "My songs")}</h2></div><div className="library-head-actions">{(librarySection === "playlists" || librarySection === "workspaces") && <button onClick={() => { setCollectionName(""); setAttachSelection(false); setCollectionSeedSong(null); setCollectionDialog(librarySection === "playlists" ? "playlist" : "workspace"); }}>+ New {librarySection === "playlists" ? "playlist" : "workspace"}</button>}{((librarySection === "playlists" && activePlaylist) || (librarySection === "workspaces" && activeWorkspace?.id !== "my-workspace")) && <button className="danger" disabled={libraryBusy} onClick={() => void removeCurrentCollection()}>Delete</button>}<span>{librarySongs.length} songs · {activeJobs} active</span></div></div>
         <nav className="library-sections" aria-label="Library sections"><button className={librarySection === "songs" ? "active" : ""} onClick={() => { setLibrarySection("songs"); setActivePlaylistId(null); setActiveWorkspaceId(null); }}>My songs</button><button className={librarySection === "playlists" ? "active" : ""} onClick={() => { setLibrarySection("playlists"); setActivePlaylistId(null); }}>Playlists</button><button className={librarySection === "workspaces" ? "active" : ""} onClick={() => { setLibrarySection("workspaces"); setActiveWorkspaceId(null); }}>Workspaces</button><button className={librarySection === "projects" ? "active" : ""} onClick={() => setLibrarySection("projects")}>Studio Projects</button></nav>
         {librarySection === "playlists" && !activePlaylist && <div className="collection-grid">{playlists.map((playlist) => <button key={playlist.id} onClick={() => setActivePlaylistId(playlist.id)}><span className="collection-icon">♫</span><strong>{playlist.name}</strong><small>{playlist.song_ids.length} songs</small></button>)}{playlists.length === 0 && <div className="collection-empty">Create a playlist to collect songs without moving them from their workspace.</div>}</div>}
         {librarySection === "workspaces" && !activeWorkspace && <div className="collection-grid">{workspaces.map((workspace) => <button key={workspace.id} onClick={() => setActiveWorkspaceId(workspace.id)}><span className="collection-icon workspace-icon">▣</span><strong>{workspace.name}</strong><small>{workspace.song_ids.length} songs</small></button>)}</div>}
@@ -2102,7 +2125,7 @@ export default function App() {
                 <input type="checkbox" checked={selectedSongIds.includes(song.id)} onChange={() => toggleSongChecked(song.id)} aria-label={`Select ${song.title}`} />
                 <i />
               </label>
-              <button className={`play ${coverSources[song.id] ? "has-cover" : ""}`} style={coverSources[song.id] ? { backgroundImage: `linear-gradient(rgba(5,8,20,.25),rgba(5,8,20,.42)),url(${coverSources[song.id]})` } : undefined} onClick={() => setPlaying(playing === song.id ? null : song.id)}>{playing === song.id ? "Ⅱ" : "▶"}</button>
+              <button className={`play ${coverSources[song.id] ? "has-cover" : ""}`} style={coverSources[song.id] ? { backgroundImage: `linear-gradient(rgba(5,8,20,.25),rgba(5,8,20,.42)),url(${coverSources[song.id]})` } : undefined} onClick={() => toggleLibraryPlay(song)}>{playing === song.id ? "Ⅱ" : "▶"}</button>
             </div>
             {Boolean(song.stems?.length) && <button
               className="stem-tree-button"
@@ -2130,11 +2153,11 @@ export default function App() {
                 <button className="menu-danger" onClick={() => { setOpenMenu(null); setOpenSongSubmenu(null); setDeleteError(""); setDeleteTargets([song]); }}><span className="menu-icon" aria-hidden="true">⌫</span>Delete song</button>
                 <div className={`song-submenu-anchor ${openSongSubmenu === `playlist:${song.id}` ? "open" : ""}`}>
                   <button className="submenu-trigger" aria-haspopup="menu" aria-expanded={openSongSubmenu === `playlist:${song.id}`} onClick={(event) => { event.stopPropagation(); setOpenSongSubmenu(openSongSubmenu === `playlist:${song.id}` ? null : `playlist:${song.id}`); }}><span className="menu-icon" aria-hidden="true">＋</span>Add to playlist<span className="submenu-chevron" aria-hidden="true">›</span></button>
-                  <div className="song-download-menu collection-submenu" role="menu">{playlists.map((playlist) => <button key={playlist.id} disabled={playlist.song_ids.includes(song.id)} onClick={() => void addToPlaylist(song, playlist)}><span className="menu-icon" aria-hidden="true">♫</span>{playlist.name}{playlist.song_ids.includes(song.id) && <small>Added</small>}</button>)}<button onClick={() => { setOpenMenu(null); setSongMenuPosition(null); setCollectionName(""); setAttachSelection(false); setCollectionDialog("playlist"); }}><span className="menu-icon" aria-hidden="true">＋</span>New playlist</button></div>
+                  <div className="song-download-menu collection-submenu" role="menu">{playlists.map((playlist) => <button key={playlist.id} disabled={playlist.song_ids.includes(song.id)} onClick={() => void addToPlaylist(song, playlist)}><span className="menu-icon" aria-hidden="true">♫</span>{playlist.name}{playlist.song_ids.includes(song.id) && <small>Added</small>}</button>)}<button onClick={() => { setOpenMenu(null); setSongMenuPosition(null); setCollectionName(""); setAttachSelection(false); setCollectionSeedSong(song); setCollectionDialog("playlist"); }}><span className="menu-icon" aria-hidden="true">＋</span>New playlist</button></div>
                 </div>
                 <div className={`song-submenu-anchor ${openSongSubmenu === `workspace:${song.id}` ? "open" : ""}`}>
                   <button className="submenu-trigger" aria-haspopup="menu" aria-expanded={openSongSubmenu === `workspace:${song.id}`} onClick={(event) => { event.stopPropagation(); setOpenSongSubmenu(openSongSubmenu === `workspace:${song.id}` ? null : `workspace:${song.id}`); }}><span className="menu-icon" aria-hidden="true">▣</span>Move to workspace<span className="submenu-chevron" aria-hidden="true">›</span></button>
-                  <div className="song-download-menu collection-submenu" role="menu">{workspaces.map((workspace) => <button key={workspace.id} disabled={workspace.song_ids.includes(song.id)} onClick={() => void moveToWorkspace(song, workspace)}><span className="menu-icon" aria-hidden="true">▣</span>{workspace.name}{workspace.song_ids.includes(song.id) && <small>Current</small>}</button>)}<button onClick={() => { setOpenMenu(null); setSongMenuPosition(null); setCollectionName(""); setAttachSelection(false); setCollectionDialog("workspace"); }}><span className="menu-icon" aria-hidden="true">＋</span>New workspace</button></div>
+                  <div className="song-download-menu collection-submenu" role="menu">{workspaces.map((workspace) => <button key={workspace.id} disabled={workspace.song_ids.includes(song.id)} onClick={() => void moveToWorkspace(song, workspace)}><span className="menu-icon" aria-hidden="true">▣</span>{workspace.name}{workspace.song_ids.includes(song.id) && <small>Current</small>}</button>)}<button onClick={() => { setOpenMenu(null); setSongMenuPosition(null); setCollectionName(""); setAttachSelection(false); setCollectionSeedSong(song); setCollectionDialog("workspace"); }}><span className="menu-icon" aria-hidden="true">＋</span>New workspace</button></div>
                 </div>
                 <div className={`song-submenu-anchor ${openSongSubmenu === `download:${song.id}` ? "open" : ""}`}>
                   <button className="submenu-trigger" aria-haspopup="menu" aria-expanded={openSongSubmenu === `download:${song.id}`} onClick={(event) => { event.stopPropagation(); setOpenSongSubmenu(openSongSubmenu === `download:${song.id}` ? null : `download:${song.id}`); }}><span className="menu-icon" aria-hidden="true">⇩</span>Download<span className="submenu-chevron" aria-hidden="true">›</span></button>
@@ -2146,7 +2169,7 @@ export default function App() {
                 </div>
               </div>}
             </div>
-            {playing === song.id && audioSources[song.id] && <SongVisualizer src={audioSources[song.id]} timedLyrics={song.timed_lyrics} onEnded={() => setPlaying(null)} />}
+            {playing === song.id && <SongVisualizer audio={libraryAudio} timedLyrics={song.timed_lyrics} onEnded={() => setPlaying(null)} />}
             {expandedStems === song.id && Boolean(song.stems?.length) && <section className="stem-branch-panel" onClick={(event) => event.stopPropagation()} aria-label={`Separated stems for ${song.title}`}>
               <div className="stem-branch-copy"><span className="stem-trunk" aria-hidden="true" />{song.stems?.map((file) => <span className={`stem-child stem-${file.replace(/\.wav$/i, "").replace(/_/g, "-")}`} key={file}>{stemLabel(file)}</span>)}</div>
               <button className="primary move-stems-button" onClick={() => void openAudioEditor(song)}>Move stems to Studio</button>
@@ -2155,6 +2178,8 @@ export default function App() {
         </div>}
       </section>
 
+      <audio ref={libraryAudio} preload="auto" onEnded={() => setPlaying(null)} />
+      {studioView === "radio" && <RadioPage songs={songs} playlists={playlists} workspaces={workspaces} coverSources={coverSources} onLeaveLibraryPlay={() => { libraryAudio.current?.pause(); setPlaying(null); }} />}
       {studioView === "effects" && <EffectsPage ready={Boolean(status?.sound_effects.ready)} detail={status?.sound_effects.detail ?? "Install the local sound-effects model and runtime to enable generation."} songs={songs} onOpenStudio={(folder) => void openStudioFromEffects(folder)} onOpenModels={() => setStudioView("models")} />}
       {studioView === "models" && <ModelsPage onChanged={() => void refresh()} />}
 
@@ -2191,6 +2216,11 @@ export default function App() {
       <p className="path">{status?.lyrics_sync.detail}</p>
       <button className="system-action" disabled={refreshingModels} onClick={() => { setRefreshingModels(true); void refreshModels().then(refresh).catch((reason) => setError(reason.message)).finally(() => setRefreshingModels(false)); }}>{refreshingModels ? "Checking YuE2 files…" : "Check YuE2 files"}</button>
       <button className="system-action" onClick={openOutputFolder}>Open output folder</button>
+      <div className="eyebrow">LAN ACCESS</div>
+      <section className="card kv"><span>sharing</span><b>{lan?.enabled ? "on" : "off"}</b><span>port</span><b>6969</b><span>web UI</span><b>{lan?.ui_ready ? "ready" : "run npm run build"}</b></section>
+      <p className="drawer-note">Leave the desktop app as it is. Turning this on lets other computers on your LAN open the same studio in a browser on port 6969. No password. Do not port-forward this to the internet.</p>
+      {lan?.enabled && lan.urls.map((url) => <p key={url} className="path">{url}</p>)}
+      <button className="system-action" disabled={lanBusy} onClick={() => void applyLanSettings(!(lan?.enabled))}>{lanBusy ? "Saving…" : lan?.enabled ? "Stop LAN sharing" : "Start LAN sharing"}</button>
       <div className="eyebrow">RUNTIME</div>
       <section className={`runtime-card ${ready ? "ready" : "blocked"}`}><strong>{ready ? "Ready to generate" : "Setup needed"}</strong><p>{blocker}</p><code>Private local worker · no external service</code></section>
     </aside>}
@@ -2256,7 +2286,7 @@ export default function App() {
         </div>
       </section>
     </div>}
-    {collectionDialog && <div className="modal-backdrop" role="presentation" onPointerDown={(event) => { if (event.target === event.currentTarget) setCollectionDialog(null); }}><section className="modal-card collection-dialog" role="dialog" aria-modal="true" aria-labelledby="collection-dialog-title"><div className="modal-head"><div><div className="eyebrow">LIBRARY</div><h2 id="collection-dialog-title">New {collectionDialog}</h2></div><button onClick={() => setCollectionDialog(null)}>✕</button></div><label>{collectionDialog === "playlist" ? "Playlist" : "Workspace"} name<input autoFocus maxLength={80} value={collectionName} onChange={(event) => setCollectionName(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") void saveCollection(); }} placeholder={collectionDialog === "playlist" ? "Road trip favorites" : "Album project"} /></label><p className="modal-note">{collectionDialog === "playlist" ? "A song can appear in as many playlists as you like." : "Moving a song here changes its primary workspace. Every song belongs to one workspace."}</p>{error && <div className="error">{error}</div>}<div className="modal-actions"><button onClick={() => setCollectionDialog(null)}>Cancel</button><button className="primary" disabled={libraryBusy || !collectionName.trim()} onClick={() => void saveCollection()}>{libraryBusy ? "Creating…" : `Create ${collectionDialog}`}</button></div></section></div>}
+    {collectionDialog && <div className="modal-backdrop" role="presentation" onPointerDown={(event) => { if (event.target === event.currentTarget) setCollectionDialog(null); }}><section className="modal-card collection-dialog" role="dialog" aria-modal="true" aria-labelledby="collection-dialog-title"><div className="modal-head"><div><div className="eyebrow">LIBRARY</div><h2 id="collection-dialog-title">New {collectionDialog}</h2></div><button onClick={() => setCollectionDialog(null)}>✕</button></div><label>{collectionDialog === "playlist" ? "Playlist" : "Workspace"} name<input autoFocus maxLength={80} value={collectionName} onChange={(event) => setCollectionName(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") void saveCollection(); }} placeholder={collectionDialog === "playlist" ? "Road trip favorites" : "Album project"} /></label><p className="modal-note">{collectionSeedSong ? (collectionDialog === "playlist" ? `“${collectionSeedSong.title}” will be added to this playlist.` : `“${collectionSeedSong.title}” will move into this workspace.`) : collectionDialog === "playlist" ? "A song can appear in as many playlists as you like." : "Moving a song here changes its primary workspace. Every song belongs to one workspace."}</p>{error && <div className="error">{error}</div>}<div className="modal-actions"><button onClick={() => setCollectionDialog(null)}>Cancel</button><button className="primary" disabled={libraryBusy || !collectionName.trim()} onClick={() => void saveCollection()}>{libraryBusy ? "Creating…" : `Create ${collectionDialog}`}</button></div></section></div>}
     {editingSong && <div className="modal-backdrop" role="presentation" onPointerDown={(event) => { if (event.target === event.currentTarget) setEditingSong(null); }}>
       <section className="modal-card" role="dialog" aria-modal="true" aria-labelledby="edit-song-title">
         <div className="modal-head"><div><div className="eyebrow">LIBRARY</div><h2 id="edit-song-title">Edit song details</h2></div><button aria-label="Close" onClick={() => setEditingSong(null)}>✕</button></div>

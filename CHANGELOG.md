@@ -2,6 +2,19 @@
 
 All notable changes to YuE2 Studio are documented here. The same notes are used for GitHub releases.
 
+## [0.6.2] — 2026-09-13
+
+### Changed
+- Windows generation uses cuDNN attention and CUDA graphs instead of math SDPA. On an RTX 3090, a 4:22 song generated in 3:09 (was ~15 minutes). FlashAttention is still Linux-only on this torch wheel; GraphAR auto-flash is forced to cuDNN, with eager decode if graph capture fails. 24 GB cards use a 1024 NAR tile. Clear VRAM or restart so the worker reloads.
+
+### Added
+- **Radio** in the top modes: play the library as a station from the desktop or a LAN browser.
+- Optional **LAN sharing** on port **6969** (System on/off, no password). Desktop sidecar stays on 7794.
+
+### Notes
+- Official “faster than playback” Linux numbers assume FlashAttention. This Windows build uses cuDNN + CUDA graphs instead.
+- Do not expose LAN sharing to the public internet.
+
 ## [0.6.1] — 2026-09-13
 
 ### Fixed
