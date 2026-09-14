@@ -58,7 +58,6 @@ class YuE2StudioContractTests(unittest.TestCase):
         elapsed = app.split("function elapsedLabel", 1)[1].split("function remainingLabel", 1)[0]
         self.assertIn("finished_at", elapsed)
         self.assertIn('generationJob?.status !== "succeeded"', app)
-        self.assertNotIn("createMediaElementSource", app)
         self.assertIn("toggleLibraryPlay", app)
         self.assertIn(".job-banner.succeeded span", css)
 
@@ -162,10 +161,15 @@ class YuE2StudioContractTests(unittest.TestCase):
         self.assertIn('STEMS_ROOT', studio)
         self.assertIn('"--repo", str(STEMS_ROOT)', studio)
 
-    def test_player_does_not_reroute_native_audio_through_web_audio(self):
+    def test_library_player_uses_blob_analyser_bars(self):
         app = (Path(__file__).resolve().parents[2] / "src" / "App.tsx").read_text(encoding="utf-8")
-        self.assertIn("captureStream", app)
-        self.assertNotIn("createMediaElementSource", app)
+        visualizer = app.split("function SongVisualizer", 1)[1].split("export default function App", 1)[0]
+        self.assertIn("createObjectURL", visualizer)
+        self.assertIn("createMediaElementSource", visualizer)
+        self.assertIn("getByteFrequencyData", visualizer)
+        self.assertIn("fftSize = 128", visualizer)
+        self.assertNotIn("captureStream", visualizer)
+        self.assertNotIn("Math.sin(t *", visualizer)
         self.assertIn("Stop and return to 0:00", app)
         self.assertIn("element.currentTime = 0", app)
 
@@ -389,8 +393,6 @@ class YuE2StudioContractTests(unittest.TestCase):
         transcribe = (root / "python" / "main.py").read_text(encoding="utf-8").split("def transcribe_cover_score", 1)[1].split("@app.get(\"/api/library/{folder}/score\")", 1)[0]
         self.assertIn("yue2_engine.unload()", transcribe)
         self.assertIn('["queued", "running"].includes(utilityJob.status)', app)
-        self.assertNotIn("createMediaStreamSource", app)
-        self.assertIn("createMediaElementSource", app)
         self.assertIn("m-a-p/SheetSage2", catalog)
         self.assertIn("m-a-p/MERT-v2-FullSong", catalog)
         self.assertIn("'sheetsage':", manager)

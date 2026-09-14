@@ -453,7 +453,8 @@ function KaraokeLyrics({ lyrics, currentTime }: { lyrics?: TimedLyrics | null; c
   </section>;
 }
 
-function SongVisualizer({ audio, timedLyrics, onEnded }: { audio: React.RefObject<HTMLAudioElement | null>; timedLyrics?: TimedLyrics | null; onEnded: () => void }) {
+function SongVisualizer({ src, timedLyrics, onEnded }: { src: string; timedLyrics?: TimedLyrics | null; onEnded: () => void }) {
+  const audio = useRef<HTMLAudioElement>(null);
   const canvas = useRef<HTMLCanvasElement>(null);
   const [isPlaying, setIsPlaying] = useState(true);
   const [currentTime, setCurrentTime] = useState(0);
@@ -463,26 +464,67 @@ function SongVisualizer({ audio, timedLyrics, onEnded }: { audio: React.RefObjec
   const hasTimedLyrics = Boolean(timedLyrics?.lines?.length);
   useEffect(() => {
     const element = audio.current; const surface = canvas.current;
-    if (!element || !surface) return;
-    const paint = surface.getContext("2d"); let frame = 0;
+    if (!element || !surface || !src) return;
+    let context: AudioContext | null = null;
+    let analyser: AnalyserNode | null = null;
+    let source: MediaElementAudioSourceNode | null = null;
+    let data = new Uint8Array(64);
+    const paint = surface.getContext("2d");
+    let frame = 0;
+    let blobUrl: string | null = null;
+    let cancelled = false;
+    const beginAnalysis = async () => {
+      if (context) { if (context.state === "suspended") await context.resume(); return; }
+      context = new AudioContext();
+      analyser = context.createAnalyser();
+      analyser.fftSize = 128;
+      analyser.smoothingTimeConstant = 0.78;
+      source = context.createMediaElementSource(element);
+      source.connect(analyser);
+      analyser.connect(context.destination);
+      data = new Uint8Array(analyser.frequencyBinCount);
+      await context.resume();
+    };
     const draw = () => {
       frame = requestAnimationFrame(draw);
+      analyser?.getByteFrequencyData(data);
       const ratio = window.devicePixelRatio || 1; const width = surface.clientWidth; const height = surface.clientHeight;
       if (surface.width !== width * ratio || surface.height !== height * ratio) { surface.width = width * ratio; surface.height = height * ratio; paint?.setTransform(ratio, 0, 0, ratio, 0, 0); }
       if (!paint) return; paint.clearRect(0, 0, width, height);
       const bars = 42; const gap = 3; const barWidth = Math.max(2, (width - gap * (bars - 1)) / bars);
       const gradient = paint.createLinearGradient(0, height, width, 0); gradient.addColorStop(0, "#55e6ee"); gradient.addColorStop(.58, "#7d65f4"); gradient.addColorStop(1, "#b654ff"); paint.fillStyle = gradient;
-      const t = element.currentTime || 0;
-      const active = !element.paused;
       for (let index = 0; index < bars; index += 1) {
-        const wave = active ? Math.abs(Math.sin(t * 6.2 + index * 0.41)) * 0.55 + Math.abs(Math.sin(t * 2.1 + index * 0.17)) * 0.45 : 0.08;
-        const barHeight = Math.max(2, wave * height);
+        const sample = data[Math.floor(index * data.length / bars)] / 255;
+        const barHeight = Math.max(2, sample * height);
         paint.fillRect(index * (barWidth + gap), height - barHeight, barWidth, barHeight);
       }
     };
+    const start = async () => {
+      try {
+        const response = await fetch(src);
+        const blob = await response.blob();
+        if (cancelled) return;
+        blobUrl = URL.createObjectURL(blob);
+        element.src = blobUrl;
+      } catch {
+        if (cancelled) return;
+        element.src = src;
+      }
+      try { await element.play(); } catch { /* autoplay can wait for the transport button */ }
+    };
+    element.crossOrigin = "anonymous";
+    element.addEventListener("play", beginAnalysis);
     draw();
-    return () => cancelAnimationFrame(frame);
-  }, [audio]);
+    void start();
+    return () => {
+      cancelled = true;
+      element.removeEventListener("play", beginAnalysis);
+      cancelAnimationFrame(frame);
+      try { source?.disconnect(); analyser?.disconnect(); } catch { /* already disconnected */ }
+      if (context) void context.close();
+      if (blobUrl) URL.revokeObjectURL(blobUrl);
+    };
+  }, [src]);
   useEffect(() => {
     const element = audio.current; if (!element) return;
     const updateTime = () => setCurrentTime(element.currentTime || 0);
@@ -493,7 +535,7 @@ function SongVisualizer({ audio, timedLyrics, onEnded }: { audio: React.RefObjec
     element.addEventListener("timeupdate", updateTime); element.addEventListener("durationchange", updateDuration); element.addEventListener("loadedmetadata", updateDuration); element.addEventListener("play", playingNow); element.addEventListener("pause", pausedNow);
     animationFrame = requestAnimationFrame(followPlayback);
     return () => { cancelAnimationFrame(animationFrame); element.removeEventListener("timeupdate", updateTime); element.removeEventListener("durationchange", updateDuration); element.removeEventListener("loadedmetadata", updateDuration); element.removeEventListener("play", playingNow); element.removeEventListener("pause", pausedNow); };
-  }, [audio]);
+  }, [src]);
   const togglePlayback = () => { const element = audio.current; if (!element) return; if (element.paused) void element.play(); else element.pause(); };
   const stopPlayback = () => { const element = audio.current; if (!element) return; element.pause(); element.currentTime = 0; setCurrentTime(0); setIsPlaying(false); };
   const seek = (value: number) => { const element = audio.current; if (!element) return; element.currentTime = value; setCurrentTime(value); };
@@ -512,6 +554,7 @@ function SongVisualizer({ audio, timedLyrics, onEnded }: { audio: React.RefObjec
       <span className="transport-volume-icon" aria-hidden="true">VOL</span>
       <input className="transport-volume" aria-label="Volume" type="range" min="0" max="1" step="0.01" value={volume} onChange={(event) => changeVolume(Number(event.target.value))} style={{ "--volume": `${volume * 100}%` } as React.CSSProperties} />
     </div>
+    <audio ref={audio} preload="auto" crossOrigin="anonymous" onEnded={() => { setIsPlaying(false); setCurrentTime(0); onEnded(); }} />
   </div>;
 }
 
@@ -544,7 +587,6 @@ export default function App() {
   const [error, setError] = useState("");
   const [serviceReachable, setServiceReachable] = useState(true);
   const [playing, setPlaying] = useState<string | null>(null);
-  const libraryAudio = useRef<HTMLAudioElement>(null);
   const [expandedStems, setExpandedStems] = useState<string | null>(null);
   const [audioSources, setAudioSources] = useState<Record<string, string>>({});
   const [coverSources, setCoverSources] = useState<Record<string, string>>({});
@@ -1771,18 +1813,7 @@ export default function App() {
   }
 
   function toggleLibraryPlay(song: Song) {
-    const element = libraryAudio.current;
-    if (playing === song.id) {
-      element?.pause();
-      setPlaying(null);
-      return;
-    }
-    const url = audioSources[song.id];
-    if (element && url) {
-      if (element.getAttribute("src") !== url) element.src = url;
-      void element.play().catch(() => undefined);
-    }
-    setPlaying(song.id);
+    setPlaying((current) => current === song.id ? null : song.id);
   }
 
   function selectedLibrarySongs() {
@@ -2169,7 +2200,7 @@ export default function App() {
                 </div>
               </div>}
             </div>
-            {playing === song.id && <SongVisualizer audio={libraryAudio} timedLyrics={song.timed_lyrics} onEnded={() => setPlaying(null)} />}
+            {playing === song.id && audioSources[song.id] && <SongVisualizer src={audioSources[song.id]} timedLyrics={song.timed_lyrics} onEnded={() => setPlaying(null)} />}
             {expandedStems === song.id && Boolean(song.stems?.length) && <section className="stem-branch-panel" onClick={(event) => event.stopPropagation()} aria-label={`Separated stems for ${song.title}`}>
               <div className="stem-branch-copy"><span className="stem-trunk" aria-hidden="true" />{song.stems?.map((file) => <span className={`stem-child stem-${file.replace(/\.wav$/i, "").replace(/_/g, "-")}`} key={file}>{stemLabel(file)}</span>)}</div>
               <button className="primary move-stems-button" onClick={() => void openAudioEditor(song)}>Move stems to Studio</button>
@@ -2178,8 +2209,7 @@ export default function App() {
         </div>}
       </section>
 
-      <audio ref={libraryAudio} preload="auto" onEnded={() => setPlaying(null)} />
-      {studioView === "radio" && <RadioPage songs={songs} playlists={playlists} workspaces={workspaces} coverSources={coverSources} onLeaveLibraryPlay={() => { libraryAudio.current?.pause(); setPlaying(null); }} />}
+      {studioView === "radio" && <RadioPage songs={songs} playlists={playlists} workspaces={workspaces} coverSources={coverSources} onLeaveLibraryPlay={() => setPlaying(null)} />}
       {studioView === "effects" && <EffectsPage ready={Boolean(status?.sound_effects.ready)} detail={status?.sound_effects.detail ?? "Install the local sound-effects model and runtime to enable generation."} songs={songs} onOpenStudio={(folder) => void openStudioFromEffects(folder)} onOpenModels={() => setStudioView("models")} />}
       {studioView === "models" && <ModelsPage onChanged={() => void refresh()} />}
 
