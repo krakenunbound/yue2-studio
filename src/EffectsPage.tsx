@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import stableAudioLogo from "./assets/stable-audio-3-small-sfx.png";
-import { addEffectToStudio, assistWriting, audioUrl, cancelJob, deleteEffect, generateEffect, getEffects, getJob, getStatus, type Job, type Song, type SoundEffect, type SoundEffectsEngineStatus } from "./api";
+import { chooseEffectAudio, importEffectAudio, type LocalEffectAudio, addEffectToStudio, abortWriting, assistWriting, audioUrl, cancelJob, deleteEffect, generateEffect, getEffects, getJob, getStatus, type Job, type Song, type SoundEffect, type SoundEffectsEngineStatus } from "./api";
 
 const PRESETS = [
   ["Doorbell", "A clean two-tone residential doorbell chime, close and dry, one complete ding-dong"],
@@ -25,9 +25,17 @@ type Props = { ready: boolean; detail: string; songs: Song[]; onOpenStudio?: (fo
 export default function EffectsPage({ ready, detail, songs, onOpenStudio, onOpenModels }: Props) {
   const [items, setItems] = useState<SoundEffect[]>([]);
   const [sources, setSources] = useState<Record<string, string>>({});
+  const [mode, setMode] = useState<"generate" | "upload">("generate");
+  const [uploadFile, setUploadFile] = useState<File | LocalEffectAudio | null>(null);
+  const [uploadName, setUploadName] = useState("");
+  const [importing, setImporting] = useState(false);
+  const importBusy = useRef(false);
+  const uploadInput = useRef<HTMLInputElement | null>(null);
   const [name, setName] = useState("");
   const [prompt, setPrompt] = useState("");
   const [enhancing, setEnhancing] = useState(false);
+  const enhanceEpoch = useRef(0);
+  const enhancingRef = useRef(false);
   const [suggestion, setSuggestion] = useState("");
   const [duration, setDuration] = useState(5);
   const [steps, setSteps] = useState(8);
@@ -77,7 +85,11 @@ export default function EffectsPage({ ready, detail, songs, onOpenStudio, onOpen
     }, 800);
     return () => window.clearInterval(timer);
   }, [job?.id, job?.status]);
-  useEffect(() => () => { audio.current?.pause(); }, []);
+  useEffect(() => () => {
+    audio.current?.pause();
+    enhanceEpoch.current += 1;
+    if (enhancingRef.current) void abortWriting().catch(() => undefined);
+  }, []);
 
   const active = Boolean(job && ["queued", "running"].includes(job.status));
   const selected = engineStatus[engine];
@@ -90,6 +102,38 @@ export default function EffectsPage({ ready, detail, songs, onOpenStudio, onOpen
     setName(label); setPrompt(value); setMessage(""); setError("");
   }
 
+  function selectUpload(file: File | LocalEffectAudio) {
+    setError(""); setMessage(""); setAddedFolder("");
+    if (!file.size || file.size > 512 * 1024 * 1024) {
+      setUploadFile(null);
+      setError(file.size ? "Choose an audio file smaller than 512 MB." : "The selected file is empty.");
+      return;
+    }
+    setUploadFile(file);
+    setUploadName(file.name.replace(/\.[^.]+$/, ""));
+  }
+
+  async function chooseUpload() {
+    if (!("__TAURI_INTERNALS__" in window)) { uploadInput.current?.click(); return; }
+    try {
+      const file = await chooseEffectAudio();
+      if (file) selectUpload(file);
+    } catch (reason: any) { setError(reason?.message ?? String(reason)); }
+  }
+
+  async function uploadSound() {
+    if (!uploadFile || importBusy.current) return;
+    importBusy.current = true; setImporting(true); setError(""); setMessage(""); setAddedFolder("");
+    try {
+      const item = await importEffectAudio(uploadFile, uploadName.trim());
+      setItems((current) => [item, ...current.filter((old) => old.id !== item.id)]);
+      setMessage(`“${item.name}” saved locally · ${item.duration.toFixed(2)} seconds${item.sample_rate ? ` · ${item.sample_rate.toLocaleString()} Hz` : ""}${item.channels ? ` · ${item.channels === 1 ? "mono" : item.channels === 2 ? "stereo" : `${item.channels} channels`}` : ""}.`);
+      setUploadFile(null); setUploadName("");
+      if (uploadInput.current) uploadInput.current.value = "";
+    } catch (reason: any) { setError(reason?.message ?? String(reason)); }
+    finally { importBusy.current = false; setImporting(false); }
+  }
+
   async function start() {
     if (!prompt.trim()) return;
     setMessage(""); setError("");
@@ -100,12 +144,25 @@ export default function EffectsPage({ ready, detail, songs, onOpenStudio, onOpen
   }
 
   async function enhance() {
+    if (enhancingRef.current || !prompt.trim()) return;
+    enhancingRef.current = true;
+    const epoch = enhanceEpoch.current;
     setEnhancing(true); setError(""); setSuggestion("");
     try {
       const result = await assistWriting({ action: "effect", description: prompt.trim(), effect_engine: engine });
-      setSuggestion(result.description || "");
-    } catch (reason: any) { setError(reason?.message ?? String(reason)); }
-    finally { setEnhancing(false); }
+      if (epoch === enhanceEpoch.current) setSuggestion(result.description || "");
+    } catch (reason: any) {
+      if (epoch === enhanceEpoch.current) setError(reason?.message ?? String(reason));
+    } finally {
+      if (epoch === enhanceEpoch.current) { enhancingRef.current = false; setEnhancing(false); }
+    }
+  }
+
+  function stopEnhancing() {
+    enhanceEpoch.current += 1;
+    enhancingRef.current = false;
+    setEnhancing(false);
+    void abortWriting().catch(() => undefined);
   }
 
   function stopPreview() {
@@ -131,7 +188,7 @@ export default function EffectsPage({ ready, detail, songs, onOpenStudio, onOpen
       await addEffectToStudio(item.id, targetSong);
       const song = songs.find((candidate) => songFolder(candidate) === targetSong);
       setAddedFolder(targetSong);
-      setMessage(`“${item.name}” added as a new Studio track${song ? ` in “${song.title}”` : ""}. Open Studio to place the ${item.duration.toFixed(1)}s clip.`);
+      setMessage(`“${item.name}” added to the Effects track${song ? ` in “${song.title}”` : ""}. Open Studio to place the ${item.duration.toFixed(1)}s clip.`);
     } catch (reason: any) { setError(reason?.message ?? String(reason)); }
   }
 
@@ -146,12 +203,26 @@ export default function EffectsPage({ ready, detail, songs, onOpenStudio, onOpen
   return <section className="effects-page main-view active">
     <header className="effects-hero">
       <img src={stableAudioLogo} alt={isWoosh ? "Woosh-Flow" : "Stable Audio 3"} />
-      <div><div className="eyebrow">LOCAL SOUND-EFFECT STUDIO</div><h1>Effects</h1><p>Generate production sounds locally with Stable Audio 3 Small SFX or Sony Woosh-Flow. Effects stay separate from your songs until you add one to a Studio session.</p></div>
-      <span className={`effects-engine ${selectedReady ? "ready" : "blocked"}`}><i />{selectedReady ? `${selected?.model ?? (isWoosh ? "Woosh-Flow" : "Stable Audio 3 SFX")} ready` : "Selected sound model unavailable"}</span>
+      <div><div className="eyebrow">LOCAL SOUND-EFFECT STUDIO</div><h1>Effects</h1><p>Generate sounds with Stable Audio 3 Small SFX or Sony Woosh-Flow, or import your own recordings. Sounds stay in your local Effects library until you add them to Studio.</p></div>
+      <span className={`effects-engine ${mode === "upload" || selectedReady ? "ready" : "blocked"}`}><i />{mode === "upload" ? "Local audio import" : selectedReady ? `${selected?.model ?? (isWoosh ? "Woosh-Flow" : "Stable Audio 3 SFX")} ready` : "Selected sound model unavailable"}</span>
     </header>
 
     <div className="effects-layout">
       <section className="effects-generator">
+        <div className="studio-scope" role="group" aria-label="Sound source">
+          <button type="button" className={mode === "generate" ? "active" : ""} disabled={importing} onClick={() => setMode("generate")}>Generate a sound</button>
+          <button type="button" className={mode === "upload" ? "active" : ""} onClick={() => setMode("upload")}>Upload your own sound</button>
+        </div>
+        {mode === "upload" ? <>
+          <div className="eyebrow">YOUR AUDIO</div><h2>Upload your own sound</h2>
+          <p className="truth-note">Copy a recording from your computer into the local Effects library. Your original file stays where it is. No AI model is needed.</p>
+          <input ref={uploadInput} type="file" hidden accept=".wav,.mp3,.flac,.m4a,.aac,.ogg,.opus,.webm,audio/*" onChange={(event) => { const file = event.target.files?.[0]; if (file) selectUpload(file); event.target.value = ""; }} />
+          <button type="button" disabled={importing} onClick={() => void chooseUpload()}>{uploadFile ? "Choose a different file" : "Choose audio file"}</button>
+          {uploadFile && <p className="truth-note">{uploadFile.name} · {(uploadFile.size / (1024 * 1024)).toFixed(2)} MB</p>}
+          <label>Sound name<input value={uploadName} maxLength={80} disabled={importing} onChange={(event) => setUploadName(event.target.value)} placeholder="Name for your sound library" /></label>
+          <p className="truth-note">WAV, MP3, FLAC, M4A, AAC, OGG, Opus or WebM · up to 512 MB. Duration and audio details are detected automatically when saved.</p>
+          <button type="button" className="primary" disabled={!uploadFile || importing} onClick={() => void uploadSound()}>{importing ? "Copying and checking audio…" : "Save to Effects library"}</button>
+        </> : <>
         <div className="eyebrow">CREATE AN EFFECT</div><h2>Describe the sound</h2>
         <label>Sound engine<select value={engine} onChange={(event) => {
           const next = event.target.value as "stable" | "woosh";
@@ -164,6 +235,7 @@ export default function EffectsPage({ ready, detail, songs, onOpenStudio, onOpen
         <label>Name <input value={name} onChange={(event) => setName(event.target.value)} placeholder="Optional library name" /></label>
         <label>Sound description <textarea rows={7} value={prompt} onChange={(event) => setPrompt(event.target.value)} placeholder="A heavy oak door slams in a stone hallway, close perspective, natural reverberation…" /></label>
         <button type="button" disabled={!prompt.trim() || enhancing} onClick={() => void enhance()}>{enhancing ? "Enhancing prompt…" : "✦ Enhance prompt"}</button>
+        {enhancing && <button type="button" onClick={stopEnhancing}>Stop writing</button>}
         <p className="truth-note">Uses your enabled Writing helper in Keys (including Gemini). Only runs when clicked; review the suggestion before using it.</p>
         {suggestion && <div className="truth-note"><label>Suggested sound description<textarea rows={5} value={suggestion} onChange={(event) => setSuggestion(event.target.value)} /></label><button type="button" onClick={() => { setPrompt(suggestion); setSuggestion(""); }}>Use this prompt</button><button type="button" onClick={() => setSuggestion("")}>Dismiss</button></div>}
         {isWoosh ? <label>Avoid (negative prompt)<input value={negativePrompt} onChange={(event) => setNegativePrompt(event.target.value)} placeholder="music, speech, distortion, hiss" /><small>Woosh uses this to steer away from unwanted sounds.</small></label> : <p className="truth-note">Stable Audio 3 Small SFX does not support negative prompts. Describe the sound and background you want in the main description. Quiet effects keep their natural level.</p>}
@@ -177,15 +249,16 @@ export default function EffectsPage({ ready, detail, songs, onOpenStudio, onOpen
         {job && <div className={`job-banner effect-job ${job.status}`}><div><strong>{job.phase}</strong><span>{job.error || `${Math.round(job.progress * 100)}%`}</span></div><div className="progress"><i style={{ width: `${Math.round(job.progress * 100)}%` }} /></div></div>}
         <div className="effect-create-actions"><button className="primary" disabled={!selectedReady || !prompt.trim() || active} onClick={() => void start()}>{active ? "Generating sound…" : "Generate effect"}</button>{active && <button className="danger" onClick={() => void cancelJob(job!.id)}>Cancel</button>}</div>
         {!selectedReady && <div className="truth-note">{selectedDetail}{onOpenModels && <button type="button" className="models-link-button" onClick={onOpenModels}>Open Models to install it</button>}</div>}
+        </>}
       </section>
 
       <section className="effects-library">
         <div className="effects-library-head"><div><div className="eyebrow">EFFECT LIBRARY</div><h2>Your sounds</h2></div><label>Send effects to<select value={targetSong} onChange={(event) => setTargetSong(event.target.value)}><option value="">Choose a song…</option>{songs.map((song) => <option value={songFolder(song)} key={song.id}>{song.title}</option>)}</select></label></div>
         {message && <div className="effect-message">{message}{addedFolder && onOpenStudio && <button type="button" className="open-studio-button" onClick={() => onOpenStudio(addedFolder)}>Open Studio</button>}</div>}{error && <div className="error">{error}</div>}
-        {!items.length && <div className="empty"><strong>No sound effects yet</strong><span>Generate a sound on the left. It will be saved here—not in Songs.</span></div>}
+        {!items.length && <div className="empty"><strong>No sound effects yet</strong><span>Generate a sound or upload your own audio to save it here.</span></div>}
         <div className="effect-grid">{items.map((item) => <article className={`effect-card ${playing === item.id ? "playing" : ""}`} key={item.id}>
           <button className="effect-play" onClick={() => togglePreview(item)} aria-label={`${playing === item.id ? "Stop" : "Play"} ${item.name}`}>{playing === item.id ? "■" : "▶"}</button>
-          <div className="effect-copy"><strong>{item.name}</strong><p>{item.prompt}</p><span>{item.duration.toFixed(1)} sec · {item.seed == null ? "validation preview" : `seed ${item.seed}`} · {item.created_at}</span>{playing === item.id && <div className="effect-playback"><i style={{ width: `${Math.min(100, currentTime / item.duration * 100)}%` }} /><b>{clock(currentTime)} / {clock(item.duration)}</b></div>}</div>
+          <div className="effect-copy"><strong>{item.name}</strong><p>{item.prompt}</p><span>{item.duration.toFixed(1)} sec · {item.source === "local-upload" ? "Imported audio" : item.seed == null ? "validation preview" : `seed ${item.seed}`} · {item.created_at}</span>{playing === item.id && <div className="effect-playback"><i style={{ width: `${Math.min(100, currentTime / item.duration * 100)}%` }} /><b>{clock(currentTime)} / {clock(item.duration)}</b></div>}</div>
           <div className="effect-actions"><button disabled={!targetSong} onClick={() => void addToStudio(item)}>Add to Studio</button><a href={sources[item.id]} download={`${item.name}.wav`}>WAV</a><button className="effect-delete" onClick={() => setConfirmDelete(item.id)}>Delete</button></div>
           {confirmDelete === item.id && <div className="effect-confirm"><span>Remove this effect?</span><button onClick={() => setConfirmDelete(null)}>Keep</button><button className="danger" onClick={() => void remove(item)}>Delete</button></div>}
         </article>)}</div>

@@ -12,7 +12,9 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-GUIDE_VERSION = 4
+from lyric_format import WRITER_FORMAT_RULE
+
+GUIDE_VERSION = 5
 
 LYRIC_SECTION_TAGS = (
     "[Intro]", "[Verse]", "[Pre-Chorus]", "[Chorus]", "[Post-Chorus]",
@@ -41,11 +43,12 @@ SHARED_RULES = [
     "YuE2 writes melody and chords in full planning, melody without chords in melody mode, or skips score planning in off mode. These are app controls, not magic words to add to a prompt.",
     "The app accepts an optional ABC score separately. Do not invent or rewrite ABC in a style or lyric response, or claim you applied a score or changed an app setting.",
     "Describe a desired musical result, not a guarantee. Exact duration, BPM, key, singer identity and note-for-note adherence are not guaranteed by a text prompt.",
-    "Do not claim audio has been rendered or heard. Gemini drafts text; the local YuE2 engine renders music.",
+    "Do not claim audio has been rendered or heard. The selected writing helper drafts text; the local YuE2 engine renders music.",
     "Keep text concise to leave room for score and music generation within YuE2's shared 24,576-token context. This is not a target length for a prompt.",
 ]
 
 LYRIC_RULES = [
+    WRITER_FORMAT_RULE,
     "Use TitleCase section tags on their own lines, such as [Verse] and [Chorus]. Official YuE2 examples use this form, not YuE v1 lowercase [verse]. [Intro], [Pre-Chorus], [Interlude], [Bridge], and [Outro] are useful conventions, not an exhaustive list of validated control tokens.",
     "Write in the requested sung language and script. If the brief is J-pop, City pop, or otherwise Japanese, write Japanese lyrics in Japanese script — not English, not romaji-only — unless the user explicitly asked for English lyrics. Preserve Unicode, natural punctuation and intentional code-switching; never transliterate or translate unless asked.",
     "Write singable lines with a clear rhythmic shape, a memorable hook and concrete imagery suited to the brief. Avoid filler, but do not ban words or imagery the user requested.",

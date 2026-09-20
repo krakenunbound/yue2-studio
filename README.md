@@ -51,12 +51,17 @@ npm run build
 npm run tauri build -- --no-bundle
 ```
 
-The project version is 0.6.2. See [CHANGELOG.md](CHANGELOG.md) for the full list.
+The project version is 0.7.0. See [CHANGELOG.md](CHANGELOG.md) for the full list.
 
 ## Licenses and upstream work
 
 YuE2 Studio uses the published YuE2-3B inference package and model. Each model download retains its upstream license and may have additional terms. In particular, Stable Audio 3 requires accepting its Hugging Face access terms before it can be downloaded. See [LICENSE](LICENSE), [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md), and [APP_THIRD_PARTY_NOTICES.md](APP_THIRD_PARTY_NOTICES.md).
 
+
+## New in this build
+
+- **Live** is an automatic song maker as well as a broadcast-style player. Start it to generate a rolling collection of random songs hands-free; you do not need to be live streaming anywhere. It starts with playback-ready catalog songs, then maintains a configurable 3/5/8-song buffer (5 by default) with random new vocal or instrumental generations. Generation continues in the background and completed songs enter the playback queue immediately, independently of the currently playing song. The setup panel hides after starting; the show keeps the view focused on the current song and a compact numbered playback queue that shows Up Next and generated-track positions. Future draws are queued to be made; vocal songs are lyric-synchronized before playback when lyrics exist, using the same lyrics visualizer and controls as Library. Odd pairings are allowed.
+- 15 extra templates (40 total), each with a thumbnail: trap, drill, boom bap, pop rap, Latin pop, corridos, reggae, soul R&B, gospel, cafe bossa, folk, trailer cue, fantasy cue, lullaby, character theme.
 
 ## New in 0.6.2
 

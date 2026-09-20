@@ -30,6 +30,7 @@ DEFINITIONS = {
     'sheetsage': ('SheetSage2 cover from audio', 'Turns a recording into an editable lead sheet so YuE2 can cover it.', 'Installs SheetSage2, its MERT-v2 encoder, and a private GPU runtime. Weights are for non-commercial use (CC-BY-NC). Uses the GPU; YuE2 waits while it transcribes.', True, 'models/sheetsage2', 'sheetsage', ('transformers','torch','torchaudio'), 6, 16, 'https://huggingface.co/m-a-p/SheetSage2'),
 }
 RUNTIME_DIRS = {'woosh':'python/woosh_runtime','main':'python/runtime', 'lyrics':'python/lyrics_runtime', 'sfx':'python/sfx_runtime', 'sheetsage':'python/sheetsage_runtime'}
+RUNTIME_PACKAGE_PINS = {'whisper': {'torchcodec': '0.7.0'}}
 STATE_FILE = OUTPUTS_ROOT / 'settings' / 'model-installations.json'
 _lock = threading.RLock()
 activity_lock = threading.RLock()
@@ -52,6 +53,14 @@ def target(entry):
 
 def runtime_python(key):
     return ROOT / RUNTIME_DIRS[DEFINITIONS[key][5]] / 'Scripts/python.exe'
+
+
+def _runtime_probe(key):
+    statements = [f'import {name}' for name in DEFINITIONS[key][6]]
+    for package, version in RUNTIME_PACKAGE_PINS.get(key, {}).items():
+        statements.append("from importlib.metadata import version as package_version")
+        statements.append(f"assert package_version({package!r}) == {version!r}")
+    return '; '.join(statements)
 
 
 def runtime_ready(key):
@@ -288,9 +297,8 @@ def _install_runtime(key):
     if not runtime.is_file():
         _run(key,[sys.executable,'-m','venv',str(runtime.parent.parent)],'Creating private runtime')
     # Repair is deliberately an import probe followed by installation, not a path-only check.
-    modules = DEFINITIONS[key][6]
     try:
-        _run(key,[str(runtime),'-c','; '.join('import '+name for name in modules)],'Checking runtime')
+        _run(key,[str(runtime),'-c',_runtime_probe(key)],'Checking runtime')
         return
     except RuntimeError:
         pass
@@ -298,14 +306,18 @@ def _install_runtime(key):
     _run(key,[str(runtime),'-m','pip','install',f'torch=={version}',f'torchaudio=={version}','--index-url',f'https://download.pytorch.org/whl/{index}'], 'Installing runtime — this can take several minutes')
     packages = {
         'yue2':[str(ROOT/'yue2_infer-0.1.5-py3-none-any.whl'),'-r',str(ROOT/'python/engine-requirements.txt')],
-        'whisper':['whisperx==3.8.4'],
+        # WhisperX 3.8.4 brings in pyannote-audio, which declares an open
+        # torchcodec lower bound. Keep it on the release line compatible with
+        # this runtime's pinned Torch 2.8.x; newer TorchCodec wheels require
+        # Torch 2.11+ and fail at DLL load time on Windows.
+        'whisper':['whisperx==3.8.4', 'torchcodec==0.7.0'],
         'cover_art':['diffusers==0.37.0','transformers==4.57.6','accelerate==1.13.0','pillow','omegaconf'],
         'stems':['demucs==4.0.1'],
         'sound_effects':['https://github.com/Stability-AI/stable-audio-3/archive/a0b57f5483c4588f827f3552b7d5c6ca2a9687be.zip'],
         'sheetsage':['transformers==4.45.2','huggingface-hub==0.36.0','safetensors==0.5.3','pretty_midi==0.2.10','mido==1.3.3','scipy'],
     }[key]
     _run(key,[str(runtime),'-m','pip','install',*packages], 'Installing feature support')
-    _run(key,[str(runtime),'-c','; '.join('import '+name for name in modules)],'Verifying installed runtime')
+    _run(key,[str(runtime),'-c',_runtime_probe(key)],'Verifying installed runtime')
 
 
 def _install(key, token):

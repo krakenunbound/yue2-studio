@@ -16,11 +16,11 @@ The first **Generate Lyrics** / **Optimize** click turns Writing Enable on so a 
 
 Between LOGS and SYSTEM. Groups:
 
-1. **Writing** — titles and lyrics (Gemini 3.5 Flash default, or Grok / Groq / OpenAI / Anthropic)
+1. **Writing** — titles and lyrics (Gemini 3.6 Flash default, or Grok / Groq / OpenAI / Anthropic / Local LLM)
 2. **Still images** — 1:1 square covers only. Default remains local SD 1.5
 3. **Motion / video** — 16:9 landscape or 9:16 portrait. Default remains local Video Studio
 
-Saving a Gemini key does not replace local YuE2. It never generates the song.
+Saving a Gemini key does not replace local YuE2. It never generates the song. To replace a previously saved cloud key, paste the intended key into the field and click **Save this category**; selecting a provider or model alone does not replace an existing key.
 
 ## Writing buttons (Create)
 
@@ -53,4 +53,4 @@ Empty title may pick up a suggested title such as *Event Horizon*. A title you t
 Local music generation works with zero keys and with Enable off.
 # GitHub exclusion
 
-The Gemini key copied from the MiniMax app is local-only, stored in `outputs/settings/api-keys.json`. Never include it in GitHub commits or release packages. The vault is excluded by `.gitignore`; do not force-add it.
+Each provider key is local-only, stored in `outputs/settings/api-keys.json`. Never include a key in GitHub commits, issue reports, screenshots, release packages, or documentation. The vault is excluded by `.gitignore`; do not force-add it.

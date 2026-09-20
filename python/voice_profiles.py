@@ -412,6 +412,74 @@ _DEFAULTS: list[dict[str, Any]] = [
         "built_in": True,
         "archived": False,
     },
+    {
+        "id": "voice-whistle-pop",
+        "name": "Mariah Carey",
+        "role": "female",
+        "register": "gospel-pop soprano with whistle color",
+        "timbre": "bright focused head voice, elastic runs, piano-ballad chest, sudden airy whistle peaks",
+        "delivery": "melismatic cadences, a huge tuneful chorus, intimate verses, no cartoon impersonation",
+        "accent": "American English with gospel-pop inflection",
+        "vibrato": "fast and shining on long belts",
+        "dynamics": "close confession into an athletic high peak",
+        "harmony": "stacked self-harmony on the last refrain only",
+        "effects": "polished 90s pop space, present centered vocal",
+        "audition_notes": "Local label only. YuE2 receives the acoustic traits, not the name.",
+        "expanded": "a gospel-pop soprano with bright head voice, elastic runs, piano-ballad chest and sudden airy high peaks rather than constant belting",
+        "built_in": True,
+        "archived": False,
+    },
+    {
+        "id": "voice-grunge-baritone",
+        "name": "Kurt Cobain",
+        "role": "male",
+        "register": "raw midrange that frays into a raspy tenor",
+        "timbre": "nasal grain, cracked vowels, intimate then suddenly hoarse, never polished",
+        "delivery": "behind-the-beat slacker verses, a shouted-sung chorus, melody still present under the rasp",
+        "accent": "Pacific Northwest American English",
+        "vibrato": "almost none; cracks instead",
+        "dynamics": "mumbled close, then a tearing refrain",
+        "harmony": "none",
+        "effects": "dry garage-band vocal, slight room, no auto-tune",
+        "audition_notes": "Local label only. YuE2 receives the acoustic traits, not the name.",
+        "expanded": "a raw midrange that frays into a raspy tenor, nasal grain, cracked vowels, slacker verses and a shouted-sung chorus with melody still inside the rasp",
+        "built_in": True,
+        "archived": False,
+    },
+    {
+        "id": "voice-arena-tenor",
+        "name": "Robert Plant",
+        "role": "male",
+        "register": "high golden hard-rock tenor",
+        "timbre": "open vowels, blues wail, elastic high cries, folk-shade in the verses",
+        "delivery": "story-first verses, then soaring wordless-feeling belts on the chorus, fully sung not growled",
+        "accent": "West Midlands British English",
+        "vibrato": "wide and proud on the high notes",
+        "dynamics": "acoustic hush into an arena wail",
+        "harmony": "none except a ghostly high echo on the last refrain",
+        "effects": "live-room rock vocal, long hall on the peaks",
+        "audition_notes": "Local label only. YuE2 receives the acoustic traits, not the name.",
+        "expanded": "a high golden hard-rock tenor with open vowels, blues wail, elastic high cries and folk-shade verses rather than constant screaming",
+        "built_in": True,
+        "archived": False,
+    },
+    {
+        "id": "voice-croon-baritone",
+        "name": "Frank Sinatra",
+        "role": "male",
+        "register": "warm mid-century crooner baritone",
+        "timbre": "smooth centered tone, conversational consonants, late-night brass-section intimacy",
+        "delivery": "behind-the-beat swing phrasing, story in every line, a memorable held last note",
+        "accent": "American English, mid-century New Jersey-New York color",
+        "vibrato": "controlled and late",
+        "dynamics": "intimate club croon, never belted rock",
+        "harmony": "none",
+        "effects": "dry-to-warm orchestral vocal, no pop stack",
+        "audition_notes": "Local label only. YuE2 receives the acoustic traits, not the name.",
+        "expanded": "a warm mid-century crooner baritone with smooth centered tone, behind-the-beat swing phrasing and late-night conversational intimacy",
+        "built_in": True,
+        "archived": False,
+    },
 ]
 
 
@@ -677,6 +745,27 @@ def expand_profile(profile: dict[str, Any]) -> str:
     return "; ".join(part for part in parts if part) or "a clearly identified human singer whose timbre suits the arrangement"
 
 
+def yue2_voice_phrase(profile: dict[str, Any], *, singer_label: str) -> str:
+    """Use acoustic traits once; the character is not a speaker embedding."""
+    name = str(profile.get("name") or "")
+    role = str(profile.get("role") or "")
+    gender = "female vocal" if role == "female" else "male vocal" if role == "male" else "backing vocal" if role == "backing" else "lead vocal"
+    bits = [gender]
+    for key in ("register", "timbre", "vibrato", "accent", "delivery", "dynamics", "harmony", "effects"):
+        value = _strip_private_name(str(profile.get(key) or "").strip(), name)
+        if key == "delivery":
+            value = re.sub(r"(?i)\b(?:folk-rock|art-rock|hard-rock|dance-pop|funk-pop)\s+(?=phrasing)", "", value)
+        if value and value.casefold() not in " ".join(bits).casefold():
+            bits.append(f"{value} vibrato" if key == "vibrato" and "vibrato" not in value.casefold() else value)
+    # Free-form profiles still work. Structured profiles already contain their
+    # traits; appending the expansion duplicates them and can import a genre.
+    if not profile.get("register") and not profile.get("timbre"):
+        expanded = expand_profile(profile)
+        if expanded:
+            bits.append(expanded)
+    return f"{singer_label}: {', '.join(bits)}"
+
+
 def normalize_slots(raw: Any) -> dict[str, str]:
     slots = {key: "" for key in SLOT_KEYS}
     if not isinstance(raw, dict):
@@ -722,17 +811,26 @@ def compile_vocal_block(assigned: dict[str, dict[str, Any]], lyrics: str = "") -
     male = assigned.get("male")
     backing = assigned.get("backing")
     parts: list[str] = []
+
+    def gender_word(profile: dict[str, Any], fallback: str) -> str:
+        role = str(profile.get("role") or "")
+        if role == "female":
+            return "Female"
+        if role == "male":
+            return "Male"
+        return fallback
+
     if female:
-        parts.append(f"Singer A (Female), {expand_profile(female)}")
+        parts.append(yue2_voice_phrase(female, singer_label=f"Singer A ({gender_word(female, 'Female')})"))
     if male:
-        label = "Singer B (Male)" if female else "Singer A (Male)"
-        parts.append(f"{label}, {expand_profile(male)}")
+        label = "Singer B" if female else "Singer A"
+        parts.append(yue2_voice_phrase(male, singer_label=f"{label} ({gender_word(male, 'Male')})"))
     if not parts:
         parts.append("a clearly identified lead vocalist whose timbre suits the requested genre")
     if backing:
-        parts.append(f"backing vocals, {expand_profile(backing)}")
+        parts.append(yue2_voice_phrase(backing, singer_label="Backing vocals"))
     elif female and male:
-        parts.append("keep the two leads distinct, no choir blend")
+        parts.append("two distinct lead voices alternating lines and joining on the chorus")
     assignments = lyric_assignments(lyrics, assigned)
     parts.extend(assignments)
     block = ", ".join(part.strip(" .,") for part in parts if str(part).strip())
@@ -766,9 +864,52 @@ def apply_instrumental_caption(description: str) -> str:
     return f"{INSTRUMENTAL_BAN}. {style}".strip(" .") if style else INSTRUMENTAL_BAN
 
 
+_ARRANGEMENT = re.compile(r"(?i)\b(?:sax(?:ophone)?|guitar|piano|synths?|synthesizer|drums?|percussion|kick|bassline|bass|strings|cello|violin|flute|brass|organ|banjo|fiddle|tempo|bpm|groove)\b")
+_VOCAL_TRAIT = re.compile(r"(?i)\b(?:vocals?|voice|singer|alto|mezzo|soprano|contralto|tenor|baritone|register|phrasing|vibrato|diction|vowels?|breath|breathy|grain|rasp|raspy|belt|falsetto|chest|head voice|tone|timbre)\b")
+
+_SINGER_LABEL = re.compile(r"^Singer\s+[AB]\b", re.IGNORECASE)
+
+
+def strip_template_singers(text: str) -> str:
+    """Drop leftover Singer A/B template timbre so assigned character traits can lead."""
+    parts = [part.strip(" ,") for part in re.split(r",\s*", text or "") if part.strip(" ,")]
+    kept: list[str] = []
+    skipping = False
+    for part in parts:
+        if _SINGER_LABEL.match(part) or re.search(r"\bSinger\s+[AB]\b", part, re.IGNORECASE):
+            skipping = True
+            continue
+        if skipping:
+            if _VOCAL_TRAIT.search(part) and not _ARRANGEMENT.search(part):
+                continue
+            skipping = False
+        kept.append(part)
+    return ", ".join(kept)
+
+
+def strip_competing_vocals(text: str) -> str:
+    """Remove flat caption singer choices without discarding the arrangement."""
+    voice = r"(?:vocals?|voices?|singers?|alto|mezzo|contralto|soprano|tenor|baritone|falsetto)"
+    kept = []
+    for part in re.split(r"[,;]\s*", text):
+        # Vocal chops and exclusions describe production, not the lead singer.
+        if re.search(r"(?i)\b(?:no|without|avoid)\b|\bvocal chops\b", part) or (_ARRANGEMENT.search(part) and not re.search(r"(?i)\b(?:vocals?|voices?|singers?)\b", part)):
+            kept.append(part)
+            continue
+        embedded = re.search(r"(?i)\s+(?:with|featuring)\s+[^,;]*?\b" + voice + r"\b", part)
+        if embedded:
+            tail = part[embedded.end():].strip()
+            part = part[:embedded.start()].strip() + (" " + tail if tail else "")
+        elif re.search(r"(?i)\b" + voice + r"\b", part):
+            continue
+        if part.strip():
+            kept.append(part.strip())
+    return ", ".join(kept)
+
+
 def apply_vocal_block(description: str, block: str) -> str:
-    """Append a compact voice phrase to a YuE2 style line."""
-    style = _compact_style(description, keep_vocal_fields=False).rstrip(" ,")
+    """Put assigned character traits first. Strip leftover template Singer A/B timbre."""
+    style = strip_competing_vocals(strip_template_singers(_compact_style(description, keep_vocal_fields=False))).rstrip(" ,")
     phrase = (block or "").strip().rstrip(" ,")
     if not phrase:
         return style
@@ -776,7 +917,7 @@ def apply_vocal_block(description: str, block: str) -> str:
         return style
     if not style:
         return phrase
-    return f"{style}, {phrase}"
+    return f"{phrase}, {style}"
 
 
 def compile_for_generation(
@@ -798,6 +939,7 @@ def compile_for_generation(
             "preview": style,
         }
     preview = apply_vocal_block(style, compiled["block"])
+    log.info("YuE2 vocal identity applied (%s)", compiled["block"][:240])
     return {
         "applied": True,
         "description": preview,

@@ -171,6 +171,9 @@ def _lyrics_for_generation(request: dict) -> str:
 
 
 def _request_payload(request: dict, output: Path) -> dict:
+    from lyric_format import validate_engine_lyrics
+    if not request.get("instrumental"):
+        validate_engine_lyrics(_lyrics_for_generation(request))
     cot = str(request.get("cot_mode", "full"))
     cfg = float(request.get("cfg", 1.0))
     if cot == "off" and abs(cfg - 1.0) < 1e-9:

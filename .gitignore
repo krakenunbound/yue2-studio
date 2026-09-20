@@ -43,6 +43,16 @@ models/
 **/*.pt
 **/*.th
 
+# Local YuE2 model files downloaded from the public model catalog
+config.json
+generation_config.json
+weights_manifest.json
+yue2_generation_config.json
+qwen.tiktoken
+yue2_infer-*.whl
+female-icon.png
+male-icon.png
+
 # Logs and scratch
 *.log
 *.tmp
@@ -67,3 +77,4 @@ python/vendor/Woosh/
 YuE2 Studio Updated.exe
 python/model_install_tools/
 python/managed/
+python/_tmp_*.py

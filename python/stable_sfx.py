@@ -10,6 +10,7 @@ import shutil
 import threading
 import time
 import uuid
+import wave
 from pathlib import Path
 from typing import Any
 
@@ -36,6 +37,8 @@ RUNTIME_PYTHON = ROOT / "python" / "sfx_runtime" / "Scripts" / "python.exe"
 RUNTIME_PACKAGE = ROOT / "python" / "sfx_runtime" / "Lib" / "site-packages" / "stable_audio_3"
 WORKER = ROOT / "python" / "stable_sfx_worker.py"
 EFFECTS_ROOT = OUTPUTS_ROOT / "effects"
+IMPORTABLE_AUDIO_SUFFIXES = {".wav", ".mp3", ".flac", ".m4a", ".aac", ".ogg", ".opus", ".webm"}
+MAX_EFFECT_UPLOAD_BYTES = 512 * 1024 * 1024
 
 # Woosh is intentionally independent of Stable Audio.  It has its own GPU
 # runtime and checkpoints, so a missing Stable installation must never make a
@@ -144,6 +147,11 @@ def list_effects() -> list[dict[str, Any]]:
     EFFECTS_ROOT.mkdir(parents=True, exist_ok=True)
     items: list[dict[str, Any]] = []
     for folder in EFFECTS_ROOT.iterdir():
+        # Imports are converted in a hidden staging directory, then atomically
+        # renamed into place.  Never expose a partial import if it is observed
+        # between those two operations.
+        if folder.name.startswith("."):
+            continue
         manifest = folder / "effect.json"
         audio = folder / "effect.wav"
         if not folder.is_dir() or not manifest.is_file() or not audio.is_file():
@@ -168,6 +176,67 @@ def get_effect(effect_id: str) -> tuple[Path, dict[str, Any]]:
     metadata = json.loads(manifest.read_text(encoding="utf-8"))
     metadata.update({"id": effect_id, "url": f"/api/effects/{effect_id}/audio"})
     return audio, metadata
+
+
+def import_local_effect(upload: Path, filename: str, name: str, ffmpeg: str) -> dict[str, Any]:
+    """Publish a locally supplied sound only after FFmpeg has prepared it.
+
+    ``upload`` is a private temporary file owned by this function.  The
+    original is retained beside the converted WAV for future use, but neither
+    its local path nor the staging directory is included in returned metadata.
+    """
+    suffix = Path(filename).suffix.casefold()
+    if suffix not in IMPORTABLE_AUDIO_SUFFIXES:
+        raise ValueError("Choose a WAV, MP3, FLAC, M4A, AAC, OGG, Opus, or WebM audio file")
+    if not upload.is_file() or upload.stat().st_size == 0:
+        raise ValueError("The selected audio file is empty")
+
+    display_name = str(name or "").strip()[:120] or Path(filename).stem[:120] or "Imported sound"
+    EFFECTS_ROOT.mkdir(parents=True, exist_ok=True)
+    effect_id = f"{time.strftime('%Y%m%d-%H%M%S')}-import-{_slug(display_name)}-{uuid.uuid4().hex[:8]}"
+    staging = EFFECTS_ROOT / f".{effect_id}.partial"
+    published = EFFECTS_ROOT / effect_id
+    original = staging / f"source{suffix}"
+    target = staging / "effect.wav"
+    try:
+        staging.mkdir(parents=False, exist_ok=False)
+        shutil.move(str(upload), str(original))
+        command = [
+            ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-i", str(original), "-vn",
+            "-ar", "44100", "-ac", "2", "-c:a", "pcm_s16le", str(target),
+        ]
+        completed = subprocess.run(
+            command, capture_output=True, text=True,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        if completed.returncode != 0 or not target.is_file() or target.stat().st_size <= 44:
+            detail = completed.stderr.strip() or "Could not prepare the imported audio"
+            raise RuntimeError(detail)
+        with wave.open(str(target), "rb") as audio:
+            frames, sample_rate, channels = audio.getnframes(), audio.getframerate(), audio.getnchannels()
+        if frames <= 0 or sample_rate <= 0 or channels <= 0:
+            raise RuntimeError("The imported audio contains no playable samples")
+        entry = {
+            "id": effect_id,
+            "name": display_name,
+            "source": "local-upload",
+            "prompt": "Imported audio",
+            "negative_prompt": "",
+            "duration": frames / sample_rate,
+            "sample_rate": sample_rate,
+            "channels": channels,
+            "seed": None,
+            "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "original_filename": Path(filename).name,
+        }
+        (staging / "effect.json").write_text(json.dumps(entry, indent=2, ensure_ascii=False), encoding="utf-8")
+        os.replace(staging, published)
+        return {**entry, "url": f"/api/effects/{effect_id}/audio"}
+    except Exception:
+        shutil.rmtree(staging, ignore_errors=True)
+        if upload.is_file():
+            upload.unlink(missing_ok=True)
+        raise
 
 
 def delete_effect(effect_id: str) -> None:

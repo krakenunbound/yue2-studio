@@ -123,6 +123,25 @@ class AiGuideTests(TestCase):
         self.assertIn(ai_guides.BRIEF_MARKER, system)
         self.assertIn("one or two sentences", system)
 
+    def test_cloud_chat_keeps_the_conversational_co_producer_prompt(self):
+        from unittest.mock import patch
+        access = {"provider": "gemini", "model": "gemini-2.5-flash", "key": "test-only", "system": ai_guides.chat_system()}
+        response = "A slow-burning city-pop confession will let the neon and rain carry the ache.\n---BRIEF---\nJapanese city pop with warm keys and a patient night-drive pulse."
+        with patch.object(ai_assist, "prepare", return_value=access), patch.object(ai_assist, "_complete", return_value=response) as complete:
+            ai_assist.chat([{"role": "user", "content": "Japanese city pop about rain"}])
+        self.assertEqual(complete.call_args.args[3], ai_guides.chat_system())
+        self.assertIn("co-producer", complete.call_args.args[3])
+
+    def test_ollama_chat_uses_the_compact_local_prompt(self):
+        from unittest.mock import patch
+        access = {"provider": "ollama", "model": "gemma3:4b", "key": "ollama", "base_url": "http://127.0.0.1:11434/v1", "system": ai_guides.chat_system()}
+        response = "I will shape that into a bright, close-miked song.\n---BRIEF---\nEnglish indie pop with guitar and a gentle lift."
+        with patch.object(ai_assist, "prepare", return_value=access), patch.object(ai_assist, "_complete", return_value=response) as complete:
+            ai_assist.chat([{"role": "user", "content": "Bright indie pop about meeting someone"}])
+        system = complete.call_args.args[3]
+        self.assertIn("You help plan a song", system)
+        self.assertNotIn("co-producer inside YuE2 Studio", system)
+
     def test_chat_reply_splits_off_the_hidden_brief(self):
         reply, brief = ai_assist._split_brief(
             "That is a great shape for a song.\n"
@@ -136,6 +155,24 @@ class AiGuideTests(TestCase):
         only_reply, no_brief = ai_assist._split_brief("What mood are you after?")
         self.assertEqual("What mood are you after?", only_reply)
         self.assertEqual("", no_brief)
+        loose_reply, loose_brief = ai_assist._split_brief(
+            "That sounds evocative.\n\n---\n\nBRIEF - Soft, hazy lo-fi track with gentle piano and strings."
+        )
+        self.assertIn("evocative", loose_reply)
+        self.assertIn("lo-fi", loose_brief)
+        self.assertNotIn("BRIEF", loose_brief)
+
+    def test_chat_turn_stays_ready_when_the_user_already_gave_a_song_idea(self):
+        reply, brief, ready = ai_assist._finalize_chat_turn(
+            "That sounds evocative. Soft piano, hazy strings, wistful mood.",
+            "A lo-fi song about the star to go out.",
+        )
+        self.assertTrue(ready)
+        self.assertIn("piano", brief.lower() + reply.lower())
+        q_reply, q_brief, q_ready = ai_assist._finalize_chat_turn("What mood are you after?", "hi")
+        self.assertFalse(q_ready)
+        self.assertEqual("", q_brief)
+        self.assertIn("mood", q_reply.lower())
 
     def test_assist_refuses_when_disabled(self):
         from tempfile import TemporaryDirectory

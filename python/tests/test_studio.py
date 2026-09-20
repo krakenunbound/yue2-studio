@@ -748,7 +748,7 @@ class StudioTest(TestCase):
         params = main.GenerateRequest(description="A song").model_dump()
         params["seed"] = 1
         job = Job("abcdef123456", "yue2", params)
-        with TemporaryDirectory() as temp, patch.object(main, "LIBRARY_ROOT", Path(temp)), patch.object(main.yue2_engine, "generate", side_effect=RuntimeError("boom")):
+        with TemporaryDirectory() as temp, patch.object(main, "LIBRARY_ROOT", Path(temp)), patch.object(main.ai_assist, "ensure_unique_title", lambda title, **kw: title), patch.object(main.yue2_engine, "generate", side_effect=RuntimeError("boom")):
             with self.assertRaisesRegex(RuntimeError, "boom"):
                 main.generate(job)
             self.assertEqual([], list(Path(temp).iterdir()))
@@ -769,6 +769,21 @@ class StudioTest(TestCase):
             self.assertEqual("song-one", items[0]["folder_name"])
             self.assertTrue((folder / "One.wav").is_file())
             self.assertFalse((folder / "song.wav").exists())
+
+    def test_library_supports_genre_nested_song_folders(self) -> None:
+        from tempfile import TemporaryDirectory
+        with TemporaryDirectory() as temp:
+            root = Path(temp)
+            folder = root / "EDM" / "Neon Horizon"
+            folder.mkdir(parents=True)
+            (folder / "song.wav").write_bytes(b"RIFF")
+            (folder / "song.json").write_text(json.dumps({"id": "one", "title": "Neon Horizon", "genre": "EDM", "audio": "song.wav", "created_at": "2026"}), encoding="utf-8")
+            with patch.object(main, "LIBRARY_ROOT", root):
+                items = main.library()
+                resolved = main.resolve_song_folder("EDM/Neon Horizon")
+            self.assertEqual("EDM/Neon Horizon", items[0]["folder_name"])
+            self.assertEqual("/api/library/EDM%2FNeon%20Horizon/Neon%20Horizon.wav", items[0]["audio_url"].split("?", 1)[0])
+            self.assertEqual(folder.resolve(), resolved.resolve())
 
     def test_song_details_can_be_updated(self) -> None:
         from tempfile import TemporaryDirectory

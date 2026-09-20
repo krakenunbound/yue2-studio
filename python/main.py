@@ -11,6 +11,7 @@ import threading
 import time
 import atexit
 import uuid
+from collections import deque
 from pathlib import Path
 from urllib.parse import quote
 
@@ -20,6 +21,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field
+from starlette.concurrency import run_in_threadpool
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from config import LAN_PORT, LIBRARY_ROOT, LOGS_ROOT, OUTPUTS_ROOT, SIDECAR_HOST, SIDECAR_PORT
@@ -41,6 +43,12 @@ import lan_access
 install(LOGS_ROOT)
 log = logging.getLogger("yue2.studio")
 app = FastAPI(title="YuE2 Studio", version="0.6.2")
+
+# The MCP process is deliberately a separate client of this local service.  Keep
+# a compact, in-memory audit trail so its actions are visible in Studio instead
+# of becoming invisible background automation.
+mcp_activity: deque[dict] = deque(maxlen=200)
+mcp_activity_lock = threading.Lock()
 
 
 @app.middleware("http")
@@ -100,6 +108,7 @@ def cancel_model_install(model_id: str):
 @app.on_event("shutdown")
 def stop_model_installations():
     model_manager.shutdown()
+    ai_assist.abort_writing(shutdown=True)
 
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
@@ -157,6 +166,10 @@ def cleanup_orphan_library() -> int:
     for folder in LIBRARY_ROOT.iterdir():
         if not folder.is_dir() or (folder / "song.json").is_file():
             continue
+        # Genre folders contain song directories but do not have their own
+        # manifest. Only remove a truly incomplete top-level song folder.
+        if any(child.is_dir() for child in folder.iterdir()):
+            continue
         try:
             shutil.rmtree(folder)
             removed += 1
@@ -205,6 +218,10 @@ class GenerateRequest(BaseModel):
     voice_snapshots: list[dict] = Field(default_factory=list)
 
 
+class SongRatingRequest(BaseModel):
+    rating: int = Field(ge=0, le=5, strict=True)
+
+
 class SongUpdateRequest(BaseModel):
     title: str = Field(min_length=1, max_length=120)
     artist: str = Field(default="", max_length=160)
@@ -224,6 +241,7 @@ class PlaylistCreateRequest(BaseModel):
 
 class AiProviderUpdate(BaseModel):
     key: str | None = Field(default=None, max_length=4000)
+    base_url: str | None = Field(default=None, max_length=200)
     clear: bool = False
 
 
@@ -347,6 +365,7 @@ class StudioClip(BaseModel):
 
 class StudioTrackState(BaseModel):
     name: str = Field(min_length=1, max_length=80)
+    lane: str | None = Field(default=None, min_length=1, max_length=80)
     gain: float = Field(default=1.0, ge=0.0, le=1.0)
     muted: bool = False
     solo: bool = False
@@ -494,16 +513,22 @@ def native_cfg_scale(cot: str, cfg: float) -> float:
     return cfg
 
 
+from lyric_format import control_lines, sung_lines, SPEAKER
+
+
 def prepare_music3_lyrics(value: str) -> tuple[str, list[str]]:
     """Keep lyrics as sung words. Move bracket performance notes into the style prompt."""
     output: list[str] = []
     directions: list[str] = []
     last_tag = ""
     current_section = ""
-    for raw_line in value.replace("\r\n", "\n").replace("\r", "\n").split("\n"):
+    normalized_lines = control_lines(value)
+    for line_index, raw_line in enumerate(normalized_lines):
         match = re.fullmatch(r"\s*\[([^\[\]\n]{1,500})\]\s*", raw_line)
         if not match:
-            output.append(raw_line.rstrip())
+            if "[" in raw_line or "]" in raw_line:
+                raise HTTPException(422, "A lyric tag is missing a bracket. Fix the tag before generating.")
+            output.extend(sung_lines(raw_line) if raw_line.strip() else [""])
             last_tag = ""
             continue
         content = re.sub(r"\s+", " ", match.group(1)).strip()
@@ -518,7 +543,8 @@ def prepare_music3_lyrics(value: str) -> tuple[str, list[str]]:
         if head == "fade out":
             directions.append("Ending: fade out")
             continue
-        tag = STRUCTURE_TAGS.get(head)
+        section_head = re.sub(r"^(verse|chorus|bridge|intro|outro)\s+[a-z]$", r"\1", head)
+        tag = STRUCTURE_TAGS.get(section_head)
         if tag:
             current_section = tag
             rendered = f"[{tag}]"
@@ -533,13 +559,15 @@ def prepare_music3_lyrics(value: str) -> tuple[str, list[str]]:
             note = detail or "perform the following lyric line in this style"
             directions.append(f"{current_section}, {performance}: {note}" if current_section else f"{performance}: {note}")
             continue
-        if head in {"female", "woman", "singer a"}:
-            singer_note = f"Singer A (Female): {detail or 'takes the following local part'}"
-            directions.append(f"{current_section}, {singer_note}" if current_section else singer_note)
-            continue
-        if head in {"male", "man", "singer b"}:
-            singer_note = f"Singer B (Male): {detail or 'takes the following local part'}"
-            directions.append(f"{current_section}, {singer_note}" if current_section else singer_note)
+        if re.fullmatch(SPEAKER, head, re.I):
+            label = {"female": "Singer A (Female)", "woman": "Singer A (Female)",
+                     "male": "Singer B (Male)", "man": "Singer B (Male)",
+                     "both": "Both singers", "duet": "Both singers"}.get(head, parts[0].strip())
+            upcoming = next((line for line in normalized_lines[line_index + 1:] if line and not line.startswith("[")), "")
+            note = detail or (f'passage beginning "{upcoming[:90]}"' if upcoming else "")
+            if note:
+                singer_note = f"{label}: {note}"
+                directions.append(f"{current_section}, {singer_note}" if current_section else singer_note)
             continue
         directions.append(f"{current_section}: {content}" if current_section else content)
 
@@ -690,15 +718,22 @@ def safe_title_stem(title: str) -> str:
     return safe
 
 
-def create_song_directory(title: str) -> Path:
+def create_song_directory(title: str, genre: str | None = None) -> Path:
     """Reserve a readable title folder without overwriting an existing take."""
     stem = safe_title_stem(title).rstrip(" .") or "song"
     if stem.split(".", 1)[0].casefold() in RESERVED_FILE_STEMS:
         stem = "Song " + stem
-    LIBRARY_ROOT.mkdir(parents=True, exist_ok=True)
+    if genre is None:
+        # Keep this helper's historical root-level behavior for callers that
+        # are not creating a generated song with a genre.
+        genre_dir = LIBRARY_ROOT
+    else:
+        genre_stem = safe_title_stem(str(genre).strip() or "Uncategorized").rstrip(" .") or "Uncategorized"
+        genre_dir = LIBRARY_ROOT / genre_stem
+        genre_dir.mkdir(parents=True, exist_ok=True)
     index = 1
     while True:
-        candidate = LIBRARY_ROOT / (stem if index == 1 else f"{stem} ({index})")
+        candidate = genre_dir / (stem if index == 1 else f"{stem} ({index})")
         try:
             candidate.mkdir()
             return candidate
@@ -741,6 +776,14 @@ def song_audio_url(folder_name: str, audio: Path) -> str:
         return f"{url}?v={audio.stat().st_mtime_ns}"
     except OSError:
         return url
+
+
+def song_folder_name(song_dir: Path) -> str:
+    """Return the stable library-relative identifier used by the API/UI."""
+    try:
+        return song_dir.resolve().relative_to(LIBRARY_ROOT.resolve()).as_posix()
+    except ValueError:
+        return song_dir.name
 
 
 def original_mix_backup_path(song_dir: Path) -> Path:
@@ -801,10 +844,7 @@ def _existing_song_titles() -> set[str]:
     titles: set[str] = set()
     if not LIBRARY_ROOT.is_dir():
         return titles
-    for folder in LIBRARY_ROOT.iterdir():
-        manifest = folder / "song.json"
-        if not manifest.is_file():
-            continue
+    for manifest in LIBRARY_ROOT.rglob("song.json"):
         try:
             titles.add(str(json.loads(manifest.read_text(encoding="utf-8")).get("title") or ""))
         except (OSError, json.JSONDecodeError):
@@ -822,7 +862,7 @@ def _export_custom_mix_as_song(song_dir: Path, metadata: dict, mix_path: Path) -
     """
     title = _studio_mix_title(str(metadata.get("title") or ""), _existing_song_titles())
     new_id = uuid.uuid4().hex
-    new_dir = create_song_directory(title)
+    new_dir = create_song_directory(title, metadata.get("genre"))
 
     audio_name = f"{safe_title_stem(title)}.wav"
     shutil.copy2(mix_path, new_dir / audio_name)
@@ -845,7 +885,7 @@ def _export_custom_mix_as_song(song_dir: Path, metadata: dict, mix_path: Path) -
         "audio": audio_name,
         "cover": cover_name or None,
         "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
-        "studio_source": song_dir.name,
+        "studio_source": song_folder_name(song_dir),
         "studio_source_title": str(metadata.get("title") or ""),
     })
     try:
@@ -854,8 +894,9 @@ def _export_custom_mix_as_song(song_dir: Path, metadata: dict, mix_path: Path) -
         log.exception("Could not measure the exported studio mix")
     (new_dir / "song.json").write_text(json.dumps(fresh, indent=2, ensure_ascii=False), encoding="utf-8")
     log.info("Exported studio mix as a new song: %s", new_dir.name)
-    return {"folder_name": new_dir.name, "title": title,
-            "audio_url": song_audio_url(new_dir.name, new_dir / audio_name)}
+    new_folder_name = song_folder_name(new_dir)
+    return {"folder_name": new_folder_name, "title": title,
+            "audio_url": song_audio_url(new_folder_name, new_dir / audio_name)}
 
 
 def align_audio_to_title(song_dir: Path, metadata: dict, title: str) -> Path:
@@ -905,7 +946,18 @@ def gpu_status() -> dict:
 
 def generate(job: Job) -> dict:
     request = job.params
-    song_dir = create_song_directory(request["title"])
+    try:
+        request["title"] = ai_assist.ensure_unique_title(
+            str(request.get("title") or ""),
+            description=str(request.get("description") or ""),
+            lyrics="" if request.get("instrumental") else str(request.get("lyrics") or ""),
+            language=str(request.get("lyrics_language") or "en"),
+            for_generation=True,
+        )
+    except PermissionError:
+        if ai_assist._title_taken(str(request.get("title") or ""), ai_assist._taken_titles()):
+            raise RuntimeError(f"Song title already exists: {request.get('title')}")
+    song_dir = create_song_directory(request["title"], request.get("genre"))
     output = song_dir / "song.wav"
     manifest = song_dir / "song.json"
     try:
@@ -917,7 +969,7 @@ def generate(job: Job) -> dict:
             "id": job.id, "title": request["title"], "description": request["description"],
             "artist": request.get("artist", ""), "album": request.get("album", ""),
             "genre": request.get("genre", ""), "year": time.strftime("%Y"), "track_number": "",
-            "lyrics": request["lyrics"], "instrumental": request["instrumental"],
+            "lyrics": lyrics_sync.normalize_lyrics(request.get("lyrics") or ""), "instrumental": request["instrumental"],
             "seed": request["seed"], "duration": engine_result["duration"],
             "cot_mode": request["cot_mode"], "abc_score": request.get("abc_score"),
             "steps": request["steps"], "cfg": request["cfg"], "top_k": request.get("top_k", 100),
@@ -927,6 +979,7 @@ def generate(job: Job) -> dict:
             "lyrics_language": request.get("lyrics_language", "en"),
             "voice_slots": request.get("voice_slots") or {},
             "voice_snapshots": request.get("voice_snapshots") or [],
+            "generation_description": request.get("generation_description") or "",
             "sample_rate": engine_result["sample_rate"], "audio": audio_name,
             "cover": None, "cover_error": None, "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
         }
@@ -939,7 +992,7 @@ def generate(job: Job) -> dict:
             job.phase, job.progress, job.eta_seconds, job.stage_progress = "Generating thumbnail", 0.91, timing_profile.cover_seconds, 0.0; job.emit()
             try:
                 cover_source = request.get("generation_description") if request.get("instrumental") else request["description"]
-                cover_art.render(job, request["title"], cover_source, request["lyrics"], song_dir / "cover.png")
+                cover_art.render(job, request["title"], cover_source, request["lyrics"], song_dir / "cover.png", progress_span=0.04)
                 metadata["cover"] = "cover.png"
                 cover_seconds = time.monotonic() - cover_started
             except Exception as error:
@@ -947,6 +1000,35 @@ def generate(job: Job) -> dict:
                 metadata["cover_error"] = str(error); log.warning("Song saved, but thumbnail failed: %s", error)
         else:
             log.info("Cover model is not installed; skipping automatic thumbnail")
+        metadata["needs_lyric_sync"] = bool(
+            not request.get("instrumental")
+            and lyrics_sync.display_lines(str(metadata.get("lyrics") or ""))
+        )
+        # Persist the thumbnail before alignment writes the updated manifest.
+        manifest.write_text(json.dumps(metadata, indent=2, ensure_ascii=False), encoding="utf-8")
+        if job.cancel.is_set():
+            raise RuntimeError("cancelled")
+        if metadata["needs_lyric_sync"]:
+            state = lyrics_sync.status()
+            if state.get("ready"):
+                job.phase, job.progress = "Synchronizing lyrics with WhisperX", 0.96
+                job.eta_seconds, job.stage_progress = None, None
+                job.emit()
+                try:
+                    # YuE2 has finished; free its local GPU allocation for WhisperX.
+                    # This does not touch the separate Ollama server.
+                    yue2_engine.cancel()
+                    lyrics_sync.run(job, song_dir, metadata, progress_base=0.96, progress_span=0.035)
+                    metadata["needs_lyric_sync"] = False
+                    metadata.pop("lyrics_sync_error", None)
+                except Exception as error:
+                    if job.cancel.is_set():
+                        raise
+                    metadata["lyrics_sync_error"] = str(error)
+                    log.warning("Song saved, but automatic lyric sync failed: %s", error)
+            else:
+                metadata["lyrics_sync_error"] = state.get("detail") or "WhisperX is not installed"
+                log.info("Skipping automatic lyric sync: %s", metadata["lyrics_sync_error"])
         measured = engine_result.get("generation_timing") or {}
         if measured:
             generation_timing.record(
@@ -957,10 +1039,16 @@ def generate(job: Job) -> dict:
             )
         manifest.write_text(json.dumps(metadata, indent=2, ensure_ascii=False), encoding="utf-8")
         audio_path = song_dir / audio_name
-        return {**metadata, "folder": str(song_dir), "folder_name": song_dir.name, "audio_url": song_audio_url(song_dir.name, audio_path) if audio_path.is_file() else f"/api/library/{quote(song_dir.name, safe='')}/{quote(audio_name, safe='')}", "cover_url": f"/api/library/{quote(song_dir.name, safe='')}/cover.png" if metadata["cover"] else None}
+        folder_name = song_folder_name(song_dir)
+        return {**metadata, "folder": str(song_dir), "folder_name": folder_name, "audio_url": song_audio_url(folder_name, audio_path) if audio_path.is_file() else f"/api/library/{quote(folder_name, safe='')}/{quote(audio_name, safe='')}", "cover_url": f"/api/library/{quote(folder_name, safe='')}/cover.png" if metadata["cover"] else None, "timed_lyrics": lyrics_sync.load(song_dir)}
     except Exception:
         if not manifest.is_file():
             shutil.rmtree(song_dir, ignore_errors=True)
+            if song_dir.parent != LIBRARY_ROOT and song_dir.parent.is_dir():
+                try:
+                    song_dir.parent.rmdir()
+                except OSError:
+                    pass
         raise
 
 
@@ -983,20 +1071,25 @@ def read_song_abc(song_dir: Path, metadata: dict | None = None) -> str:
 def library() -> list[dict]:
     LIBRARY_ROOT.mkdir(parents=True, exist_ok=True)
     items = []
-    for manifest in LIBRARY_ROOT.glob("*/song.json"):
+    for manifest in LIBRARY_ROOT.rglob("song.json"):
         try:
             item = json.loads(manifest.read_text(encoding="utf-8"))
             audio = song_audio_file(manifest.parent, item)
             if audio.is_file():
+                aligned = align_audio_to_title(manifest.parent, item, str(item.get("title") or "song"))
+                if aligned != audio or item.get("audio") != aligned.name:
+                    manifest.write_text(json.dumps(item, indent=2, ensure_ascii=False), encoding="utf-8")
+                audio = aligned
                 planned = read_song_abc(manifest.parent, item)
+                folder_name = song_folder_name(manifest.parent)
                 items.append({
                     **item,
                     "has_score": bool(planned),
                     "folder": str(manifest.parent),
-                    "folder_name": manifest.parent.name,
-                    "audio_url": song_audio_url(manifest.parent.name, audio),
-                    "original_audio_url": original_mix_url(manifest.parent.name, manifest.parent),
-                    "cover_url": f"/api/library/{quote(manifest.parent.name, safe='')}/{quote(item['cover'], safe='')}?v={(manifest.parent / item['cover']).stat().st_mtime_ns}" if item.get("cover") and (manifest.parent / item["cover"]).is_file() else None,
+                    "folder_name": folder_name,
+                    "audio_url": song_audio_url(folder_name, audio),
+                    "original_audio_url": original_mix_url(folder_name, manifest.parent),
+                    "cover_url": f"/api/library/{quote(folder_name, safe='')}/{quote(item['cover'], safe='')}?v={(manifest.parent / item['cover']).stat().st_mtime_ns}" if item.get("cover") and (manifest.parent / item["cover"]).is_file() else None,
                     "timed_lyrics": lyrics_sync.load(manifest.parent),
                 })
         except (OSError, json.JSONDecodeError): pass
@@ -1167,6 +1260,27 @@ def status():
     return {"model": yue2_engine.model_status(), "cover_art": cover_art.status(), "stems": stems_status(), "sound_effects": stable_sfx.status(), "lyrics_sync": lyrics_sync.status(), "sheetsage": sheetsage_status, "exports": {"ready": bool(ffmpeg), "detail": "MP3 and FLAC export ready" if ffmpeg else "Run Setup to install the private FFmpeg exporter"}, "service": inference_status(), "gpu": gpu_status(), "ai": ai_vault.status(), "jobs": [job.snapshot() for job in manager.list()[:30]]}
 
 
+class McpActivityRequest(BaseModel):
+    tool: str = Field(min_length=1, max_length=80)
+    summary: str = Field(default="", max_length=500)
+    status: str = Field(default="started", pattern="^(connected|disconnected|started|succeeded|failed)$")
+
+
+@app.get("/api/mcp/activity")
+def get_mcp_activity():
+    with mcp_activity_lock:
+        return {"items": list(reversed(mcp_activity))}
+
+
+@app.post("/api/mcp/activity")
+def record_mcp_activity(request: McpActivityRequest):
+    entry = {"id": uuid.uuid4().hex[:12], "at": time.time(), "tool": request.tool, "summary": request.summary, "status": request.status}
+    with mcp_activity_lock:
+        mcp_activity.append(entry)
+    log.info("MCP %s: %s", request.tool, request.summary)
+    return {"ok": True, "activity": entry}
+
+
 class LyricPreferencesRequest(BaseModel):
     avoid: str = Field(default="", max_length=12000)
 
@@ -1316,6 +1430,8 @@ def assist_chat(request: ChatAssistRequest):
             language=request.language,
             instrumental=request.instrumental,
         )
+    except ai_assist.WritingBusyError as error:
+        raise HTTPException(409, str(error)) from error
     except PermissionError as error:
         raise HTTPException(409, str(error)) from error
     except ValueError as error:
@@ -1358,12 +1474,33 @@ def assist_writing(request: WritingAssistRequest):
             lyrics=request.lyrics,
             language=request.language,
         )
+    except ai_assist.WritingBusyError as error:
+        raise HTTPException(409, str(error)) from error
     except PermissionError as error:
+        log.warning("Writing assistant refused: %s", error)
         raise HTTPException(409, str(error)) from error
     except ValueError as error:
+        log.warning("Writing assistant bad request: %s", error)
         raise HTTPException(400, str(error)) from error
-    except RuntimeError as error:
+    except ai_assist.WritingValidationError as error:
+        log.warning("Writing draft rejected (%s): %s", request.action, error)
         raise HTTPException(502, str(error)) from error
+    except RuntimeError as error:
+        if str(error) == "Writing cancelled":
+            log.info("Writing assistant cancelled (%s)", request.action)
+            raise HTTPException(409, str(error)) from None
+        log.exception("Writing assistant failed (%s): %s", request.action, error)
+        raise HTTPException(502, str(error)) from error
+    except Exception as error:
+        log.exception("Writing assistant crashed (%s)", request.action)
+        raise HTTPException(502, str(error)) from error
+
+
+@app.post("/api/assist/abort")
+def assist_abort():
+    ai_assist.abort_writing()
+    return {"ok": True}
+
 
 @app.post("/api/models/refresh")
 def refresh_models(): return yue2_engine.model_status()
@@ -1404,6 +1541,7 @@ def cancel(job_id: str):
     if not manager.cancel_job(job_id): raise HTTPException(409, "Job is already finished or missing")
     if was_running and target and target.kind == "yue2":
         yue2_engine.cancel()
+        lyrics_sync.cancel()
     elif was_running and target and target.kind == "lyrics_sync":
         lyrics_sync.cancel()
     elif was_running and target and target.kind == "stable_sfx":
@@ -1428,7 +1566,7 @@ async def job_socket(socket: WebSocket, job_id: str):
 def get_library(): return {"items": library()}
 
 
-@app.get("/api/library/{folder}/timed-lyrics")
+@app.get("/api/library/{folder:path}/timed-lyrics")
 def get_timed_lyrics(folder: str):
     song_dir = resolve_song_folder(folder)
     payload = lyrics_sync.load(song_dir)
@@ -1518,17 +1656,46 @@ def move_song_to_workspace(workspace_id: str, song_id: str):
 
 
 def resolve_song_folder(folder: str) -> Path:
-    """Resolve one direct library child without permitting path traversal."""
-    if not folder or Path(folder).name != folder or folder in {".", ".."}:
+    """Resolve one library song folder without permitting path traversal."""
+    relative = Path(str(folder or ""))
+    if (
+        not folder
+        or relative.is_absolute()
+        or any(part in {"", ".", ".."} for part in relative.parts)
+    ):
         raise HTTPException(404, "Song not found")
     root = LIBRARY_ROOT.resolve()
-    target = (root / folder).resolve()
-    if target.parent != root or not target.is_dir():
+    target = (root / relative).resolve()
+    if root not in target.parents or not target.is_dir():
+        raise HTTPException(404, "Song not found")
+    if not (target / "song.json").is_file() and any(child.is_dir() for child in target.iterdir()):
         raise HTTPException(404, "Song not found")
     return target
 
 
-@app.patch("/api/library/{folder}")
+# Register the specific Studio route before the catch-all song update route.
+@app.patch("/api/library/{folder:path}/studio")
+def save_studio_session(folder: str, request: StudioSessionRequest):
+    song_dir = resolve_song_folder(folder); manifest, metadata = _studio_manifest(song_dir)
+    metadata["studio"] = {"tracks": [track.model_dump() for track in request.tracks], "updated_at": time.strftime("%Y-%m-%d %H:%M:%S")}
+    manifest.write_text(json.dumps(metadata, indent=2, ensure_ascii=False), encoding="utf-8")
+    return {"saved": True}
+
+
+@app.patch("/api/library/{folder:path}/rating")
+def rate_song(folder: str, request: SongRatingRequest):
+    target = resolve_song_folder(folder)
+    manifest = target / "song.json"
+    try:
+        metadata = json.loads(manifest.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise HTTPException(404, "Song details not found") from exc
+    metadata["rating"] = request.rating
+    manifest.write_text(json.dumps(metadata, indent=2, ensure_ascii=False), encoding="utf-8")
+    return {"rating": request.rating}
+
+
+@app.patch("/api/library/{folder:path}")
 def update_song(folder: str, request: SongUpdateRequest):
     target = resolve_song_folder(folder)
     manifest = target / "song.json"
@@ -1574,6 +1741,7 @@ def regenerate_cover(job: Job) -> dict:
         raise RuntimeError("Song details could not be read") from exc
     pending = song_dir / "cover.pending.png"
     final = song_dir / "cover.png"
+    folder_name = song_folder_name(song_dir)
     try:
         result = cover_art.render(
             job, str(metadata.get("title") or "Untitled Song"),
@@ -1588,12 +1756,12 @@ def regenerate_cover(job: Job) -> dict:
         metadata["cover_direction"] = str(request.get("direction") or "")
         manifest.write_text(json.dumps(metadata, indent=2, ensure_ascii=False), encoding="utf-8")
         log.info("Regenerated cover art: %s", final)
-        return {"folder": song_dir.name, "cover_url": f"/api/library/{song_dir.name}/cover.png?v={final.stat().st_mtime_ns}", "seed": result.get("seed")}
+        return {"folder": folder_name, "cover_url": f"/api/library/{quote(folder_name, safe='')}/cover.png?v={final.stat().st_mtime_ns}", "seed": result.get("seed")}
     finally:
         pending.unlink(missing_ok=True)
 
 
-@app.post("/api/library/{folder}/cover")
+@app.post("/api/library/{folder:path}/cover")
 def start_cover_regeneration(folder: str, request: CoverArtRequest):
     resolve_song_folder(folder)
     if not cover_art.available():
@@ -1602,7 +1770,7 @@ def start_cover_regeneration(folder: str, request: CoverArtRequest):
     return {"job": job.snapshot()}
 
 
-@app.post("/api/library/{folder}/cover/upload")
+@app.post("/api/library/{folder:path}/cover/upload")
 async def upload_song_cover(folder: str, filename: str, request: Request):
     song_dir = resolve_song_folder(folder)
     suffix = Path(filename).suffix.casefold()
@@ -1637,7 +1805,8 @@ async def upload_song_cover(folder: str, filename: str, request: Request):
     finally:
         temporary.unlink(missing_ok=True)
         prepared.unlink(missing_ok=True)
-    return {"uploaded": True, "cover_url": f"/api/library/{song_dir.name}/cover.png?v={target.stat().st_mtime_ns}"}
+    folder_name = song_folder_name(song_dir)
+    return {"uploaded": True, "cover_url": f"/api/library/{quote(folder_name, safe='')}/cover.png?v={target.stat().st_mtime_ns}"}
 
 
 def export_audio(song_dir: Path, fmt: str) -> dict:
@@ -1685,10 +1854,11 @@ def export_audio(song_dir: Path, fmt: str) -> dict:
     command.append(str(target))
     result = subprocess.run(command, capture_output=True, text=True, creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
     if result.returncode != 0 or not target.is_file(): raise RuntimeError(result.stderr.strip() or f"Could not create {fmt.upper()}")
-    return {"download_url": f"/api/library/{song_dir.name}/{target.name}", "filename": download_filename(song_dir, target.suffix)}
+    folder_name = song_folder_name(song_dir)
+    return {"download_url": f"/api/library/{quote(folder_name, safe='')}/{quote(target.name, safe='')}", "filename": download_filename(song_dir, target.suffix)}
 
 
-@app.post("/api/library/{folder}/export/{fmt}")
+@app.post("/api/library/{folder:path}/export/{fmt}")
 def convert_audio(folder: str, fmt: str):
     if fmt not in {"mp3", "flac"}: raise HTTPException(422, "Format must be MP3 or FLAC")
     try: return export_audio(resolve_song_folder(folder), fmt)
@@ -1723,10 +1893,11 @@ def extract_stems(job: Job) -> dict:
         detail = next((item for item in reversed(tail) if item and "STEM_PROGRESS" not in item), "")
         raise RuntimeError(detail or f"Stem extraction exited with code {code}")
     manifest_path = song_dir / "song.json"; metadata = json.loads(manifest_path.read_text(encoding="utf-8")); metadata["stems"] = [path.name for path in files]; manifest_path.write_text(json.dumps(metadata, indent=2, ensure_ascii=False), encoding="utf-8")
-    return {"folder": song_dir.name, "files": [{"name": path.name, "url": f"/api/library/{song_dir.name}/stems/{path.name}"} for path in files]}
+    folder_name = song_folder_name(song_dir)
+    return {"folder": folder_name, "files": [{"name": path.name, "url": f"/api/library/{quote(folder_name, safe='')}/stems/{quote(path.name, safe='')}"} for path in files]}
 
 
-@app.post("/api/library/{folder}/stems")
+@app.post("/api/library/{folder:path}/stems")
 def start_stem_extraction(folder: str, request: StemRequest):
     resolve_song_folder(folder); state = stems_status()
     if not state["ready"]: raise HTTPException(409, state["detail"])
@@ -1743,15 +1914,7 @@ def _studio_manifest(song_dir: Path) -> tuple[Path, dict]:
     return manifest, metadata
 
 
-@app.patch("/api/library/{folder}/studio")
-def save_studio_session(folder: str, request: StudioSessionRequest):
-    song_dir = resolve_song_folder(folder); manifest, metadata = _studio_manifest(song_dir)
-    metadata["studio"] = {"tracks": [track.model_dump() for track in request.tracks], "updated_at": time.strftime("%Y-%m-%d %H:%M:%S")}
-    manifest.write_text(json.dumps(metadata, indent=2, ensure_ascii=False), encoding="utf-8")
-    return {"saved": True}
-
-
-@app.post("/api/library/{folder}/studio/import")
+@app.post("/api/library/{folder:path}/studio/import")
 async def import_studio_track(folder: str, filename: str, request: Request):
     song_dir = resolve_song_folder(folder); manifest, metadata = _studio_manifest(song_dir)
     suffix = Path(filename).suffix.casefold()
@@ -1787,10 +1950,11 @@ async def import_studio_track(folder: str, filename: str, request: Request):
     entry = {"file": target.name, "name": Path(filename).stem[:80], "original": original.name}
     metadata.setdefault("studio_imports", []).append(entry)
     manifest.write_text(json.dumps(metadata, indent=2, ensure_ascii=False), encoding="utf-8")
-    return {**entry, "url": f"/api/library/{song_dir.name}/studio/tracks/{target.name}"}
+    folder_name = song_folder_name(song_dir)
+    return {**entry, "url": f"/api/library/{quote(folder_name, safe='')}/studio/tracks/{quote(target.name, safe='')}"}
 
 
-@app.post("/api/library/{folder}/studio/generate-sfx")
+@app.post("/api/library/{folder:path}/studio/generate-sfx")
 def generate_studio_sound(folder: str, request: SoundEffectRequest):
     song_dir = resolve_song_folder(folder)
     current = stable_sfx.woosh_status() if request.engine == "woosh" else stable_sfx.status()
@@ -1824,6 +1988,43 @@ def generate_effect(request: SoundEffectRequest):
     return {"job": job.snapshot()}
 
 
+@app.post("/api/effects/import")
+async def import_effect(filename: str, request: Request, name: str = ""):
+    """Accept raw local audio bytes and add the converted sound to Effects."""
+    suffix = Path(filename).suffix.casefold()
+    if suffix not in stable_sfx.IMPORTABLE_AUDIO_SUFFIXES:
+        raise HTTPException(415, "Choose a WAV, MP3, FLAC, M4A, AAC, OGG, Opus, or WebM audio file")
+    ffmpeg = ffmpeg_path()
+    if not ffmpeg:
+        raise HTTPException(409, "FFmpeg is not installed")
+
+    stable_sfx.EFFECTS_ROOT.mkdir(parents=True, exist_ok=True)
+    upload = stable_sfx.EFFECTS_ROOT / f".upload-{uuid.uuid4().hex}{suffix}"
+    total = 0
+    try:
+        with upload.open("wb") as handle:
+            async for chunk in request.stream():
+                total += len(chunk)
+                if total > stable_sfx.MAX_EFFECT_UPLOAD_BYTES:
+                    raise HTTPException(413, "Audio imports are limited to 512 MB")
+                handle.write(chunk)
+        if total == 0:
+            raise HTTPException(400, "The selected audio file is empty")
+        item = await run_in_threadpool(stable_sfx.import_local_effect, upload, filename, name, ffmpeg)
+        return item
+    except HTTPException:
+        raise
+    except ValueError as error:
+        raise HTTPException(400, str(error)) from error
+    except RuntimeError as error:
+        raise HTTPException(409, str(error)) from error
+    finally:
+        # Successful import moves this file into its published effect folder.
+        # Every failure path removes the raw upload before responding.
+        if upload.is_file():
+            upload.unlink(missing_ok=True)
+
+
 @app.get("/api/effects/{effect_id}/audio")
 def effect_audio(effect_id: str):
     try:
@@ -1833,13 +2034,31 @@ def effect_audio(effect_id: str):
     return FileResponse(audio, media_type="audio/wav", filename=f"{effect_id}.wav")
 
 
-@app.post("/api/effects/{effect_id}/add-to-studio/{folder}")
+@app.post("/api/effects/{effect_id}/add-to-studio/{folder:path}")
 def add_effect_to_studio(effect_id: str, folder: str):
     song_dir = resolve_song_folder(folder)
     try:
-        return stable_sfx.add_to_song(effect_id, song_dir)
+        entry = stable_sfx.add_to_song(effect_id, song_dir)
     except (FileNotFoundError, ValueError, json.JSONDecodeError):
         raise HTTPException(404, "Sound effect not found")
+    folder_name = song_folder_name(song_dir)
+    entry["url"] = f"/api/library/{quote(folder_name, safe='')}/studio/tracks/{quote(entry['file'], safe='')}"
+    # Effects-page additions join the shared Effects lane immediately.  The
+    # Studio can still move this sound to another effects lane afterwards.
+    manifest, metadata = _studio_manifest(song_dir)
+    duration = max(0.001, float(entry.get("duration") or 0.001))
+    state = StudioTrackState(
+        name=entry["file"], lane="Effects", gain=1.0, muted=False, solo=False,
+        use_clips=True,
+        clips=[StudioClip(id=uuid.uuid4().hex, start=0.0, source_in=0.0, source_out=duration)],
+    )
+    studio = metadata.get("studio") if isinstance(metadata.get("studio"), dict) else {}
+    tracks = studio.get("tracks") if isinstance(studio.get("tracks"), list) else []
+    studio["tracks"] = [*tracks, state.model_dump()]
+    studio["updated_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
+    metadata["studio"] = studio
+    manifest.write_text(json.dumps(metadata, indent=2, ensure_ascii=False), encoding="utf-8")
+    return entry
 
 
 @app.delete("/api/effects/{effect_id}")
@@ -2090,7 +2309,7 @@ def _render_studio_audio(ffmpeg: str, sources: list, request: StudioBounceReques
         raise HTTPException(409, result.stderr.strip() or "Could not build the studio mix")
 
 
-@app.post("/api/library/{folder}/studio/bounce")
+@app.post("/api/library/{folder:path}/studio/bounce")
 def bounce_studio_mix(folder: str, request: StudioBounceRequest):
     song_dir = resolve_song_folder(folder); manifest, metadata = _studio_manifest(song_dir)
     ffmpeg = ffmpeg_path()
@@ -2102,7 +2321,7 @@ def bounce_studio_mix(folder: str, request: StudioBounceRequest):
     _render_studio_audio(ffmpeg, sources, request, target)
     entry = {"file": target.name, "variant": request.variant, "created_at": time.strftime("%Y-%m-%d %H:%M:%S")}
     payload = {
-        "download_url": f"/api/library/{song_dir.name}/studio/mixes/{target.name}",
+        "download_url": f"/api/library/{quote(song_folder_name(song_dir), safe='')}/studio/mixes/{quote(target.name, safe='')}",
         "filename": f"{download_filename(song_dir, '')}-{request.variant}.wav",
         "promoted": False,
     }
@@ -2121,7 +2340,7 @@ def bounce_studio_mix(folder: str, request: StudioBounceRequest):
     return payload
 
 
-@app.post("/api/library/{folder}/studio/combine")
+@app.post("/api/library/{folder:path}/studio/combine")
 def combine_studio_tracks(folder: str, request: StudioCombineRequest):
     song_dir = resolve_song_folder(folder)
     manifest, metadata = _studio_manifest(song_dir)
@@ -2152,7 +2371,8 @@ def combine_studio_tracks(folder: str, request: StudioCombineRequest):
         raise
     entry = {"file": filename, "name": request.name.strip() or "Combined sounds", "duration": duration,
              "combined_sources": originals, "combined_states": [track.model_dump() for track in states]}
-    lane = StudioTrackState(name=filename, use_clips=True, clips=[StudioClip(id=uuid.uuid4().hex, source_out=duration)])
+    shared_lane = states[0].lane if all(track.lane == states[0].lane for track in states) else None
+    lane = StudioTrackState(name=filename, lane=shared_lane, use_clips=True, clips=[StudioClip(id=uuid.uuid4().hex, source_out=duration)])
     updated = [track.model_dump() for track in request.tracks if track.name not in chosen] + [lane.model_dump()]
     metadata["studio_imports"] = [item for item in imports if item["file"] not in chosen] + [entry]
     metadata["studio"] = {"tracks": updated, "updated_at": time.strftime("%Y-%m-%d %H:%M:%S")}
@@ -2160,7 +2380,7 @@ def combine_studio_tracks(folder: str, request: StudioCombineRequest):
     return {"imports": [entry], "tracks": updated, "removed": list(chosen)}
 
 
-@app.post("/api/library/{folder}/studio/uncombine/{filename}")
+@app.post("/api/library/{folder:path}/studio/uncombine/{filename}")
 def uncombine_studio_tracks(folder: str, filename: str, request: StudioSessionRequest):
     song_dir = resolve_song_folder(folder)
     manifest, metadata = _studio_manifest(song_dir)
@@ -2179,7 +2399,7 @@ def uncombine_studio_tracks(folder: str, filename: str, request: StudioSessionRe
     return {"imports": originals, "tracks": updated, "removed": [filename]}
 
 
-@app.get("/api/library/{folder}/studio/original-mix")
+@app.get("/api/library/{folder:path}/studio/original-mix")
 def studio_original_mix(folder: str):
     song_dir = resolve_song_folder(folder)
     target = original_mix_backup_path(song_dir).resolve()
@@ -2189,7 +2409,7 @@ def studio_original_mix(folder: str):
     return FileResponse(target, media_type="audio/wav", filename="original_mix.wav")
 
 
-@app.get("/api/library/{folder}/studio/mixes/{filename}")
+@app.get("/api/library/{folder:path}/studio/mixes/{filename}")
 def studio_mix_file(folder: str, filename: str):
     song_dir = resolve_song_folder(folder)
     if Path(filename).name != filename: raise HTTPException(404, "Studio mix not found")
@@ -2198,7 +2418,7 @@ def studio_mix_file(folder: str, filename: str):
     return FileResponse(target, media_type="audio/wav", filename=filename)
 
 
-@app.get("/api/library/{folder}/studio/tracks/{filename}")
+@app.get("/api/library/{folder:path}/studio/tracks/{filename}")
 def studio_track_file(folder: str, filename: str):
     song_dir = resolve_song_folder(folder)
     if Path(filename).name != filename: raise HTTPException(404, "Studio track not found")
@@ -2207,7 +2427,7 @@ def studio_track_file(folder: str, filename: str):
     return FileResponse(target, media_type="audio/wav", filename=filename)
 
 
-@app.delete("/api/library/{folder}/studio/tracks/{filename}")
+@app.delete("/api/library/{folder:path}/studio/tracks/{filename}")
 def remove_studio_track(folder: str, filename: str):
     song_dir = resolve_song_folder(folder); manifest, metadata = _studio_manifest(song_dir)
     if Path(filename).name != filename: raise HTTPException(404, "Studio track not found")
@@ -2233,7 +2453,7 @@ def synchronize_song_lyrics(job: Job) -> dict:
     return lyrics_sync.run(job, song_dir, metadata)
 
 
-@app.post("/api/library/{folder}/lyrics-sync")
+@app.post("/api/library/{folder:path}/lyrics-sync")
 def start_lyrics_synchronization(folder: str):
     song_dir = resolve_song_folder(folder)
     try:
@@ -2258,7 +2478,7 @@ def transcribe_cover_score(job: Job) -> dict:
             job.phase, job.progress = "Using saved lead sheet", 1.0
             job.emit()
             return {
-                "folder": song_dir.name,
+                "folder": song_folder_name(song_dir),
                 "abc": cached,
                 "melody_only": melody_only,
                 "warnings": [],
@@ -2269,7 +2489,7 @@ def transcribe_cover_score(job: Job) -> dict:
     return sheetsage.run(job, song_dir, song_audio_file(song_dir), melody_only)
 
 
-@app.get("/api/library/{folder}/score")
+@app.get("/api/library/{folder:path}/score")
 def song_planned_score(folder: str):
     song_dir = resolve_song_folder(folder)
     try:
@@ -2280,7 +2500,7 @@ def song_planned_score(folder: str):
     return {"abc": abc, "has_score": bool(abc)}
 
 
-@app.post("/api/library/{folder}/cover-transcribe")
+@app.post("/api/library/{folder:path}/cover-transcribe")
 def start_cover_transcription(folder: str, request: CoverTranscribeRequest):
     state = sheetsage.status()
     if not state["ready"]:
@@ -2294,7 +2514,7 @@ def start_cover_transcription(folder: str, request: CoverTranscribeRequest):
     return {"job": job.snapshot()}
 
 
-@app.get("/api/library/{folder}/stems/{filename}")
+@app.get("/api/library/{folder:path}/stems/{filename}")
 def stem_file(folder: str, filename: str):
     song_dir = resolve_song_folder(folder)
     if Path(filename).name != filename: raise HTTPException(404, "Stem not found")
@@ -2314,7 +2534,7 @@ def _reveal_in_explorer(path: Path) -> Path:
     return path
 
 
-@app.post("/api/library/{folder}/open")
+@app.post("/api/library/{folder:path}/open")
 def open_song_folder(folder: str):
     song_dir = resolve_song_folder(folder)
     try:
@@ -2331,7 +2551,7 @@ def open_song_folder(folder: str):
     return {"path": str(opened)}
 
 
-@app.delete("/api/library/{folder}")
+@app.delete("/api/library/{folder:path}")
 def delete_song(folder: str):
     target = resolve_song_folder(folder)
     title = target.name
@@ -2373,7 +2593,7 @@ def delete_song(folder: str):
     log.info("Deleted YuE2 song: %s", title)
     return {"deleted": True}
 
-@app.get("/api/library/{folder}/{filename}")
+@app.get("/api/library/{folder:path}/{filename}")
 def library_file(folder: str, filename: str):
     song_dir = resolve_song_folder(folder)
     target = (song_dir / filename).resolve()

@@ -163,7 +163,7 @@ export default function VoiceProfilesPanel({ profiles, slots, lyrics, descriptio
         <div>
           <div className="eyebrow">CHARACTERS</div>
           <strong>Choose who sings</strong>
-          <p>The name stays local. YuE2 only gets the sound description — husky contralto, warbling vibrato, analog warmth.</p>
+          <p>Your selection guides vocal tone and delivery while keeping the song’s genre. These are descriptive presets, not cloned or guaranteed singer identities.</p>
         </div>
         <button type="button" onClick={() => { setPickerSlot("female"); setTab("official"); setError(""); }}>Browse</button>
       </div>
@@ -191,19 +191,19 @@ export default function VoiceProfilesPanel({ profiles, slots, lyrics, descriptio
             <button type="button" className={tab === "official" ? "on" : ""} onClick={() => setTab("official")}>Official</button>
             <button type="button" className={tab === "mine" ? "on" : ""} onClick={() => setTab("mine")}>Mine</button>
           </div>
+          <p className="modal-note">Showing {ROLE_LABEL[pickerSlot === "backing" ? "backing" : pickerSlot]} voices for this slot. Open Male or Female above to use the other list — nothing here is disabled.</p>
           <div className="character-grid">
-            {shown.map((profile) => {
+            {profilesForSlot(shown, pickerSlot).map((profile) => {
               const src = avatarSrc(profile);
               const selected = slots[pickerSlot] === profile.id;
-              const allowed = profilesForSlot(active, pickerSlot).some((item) => item.id === profile.id);
               return (
-                <button type="button" className={`character-card ${selected ? "selected" : ""}`} key={profile.id} disabled={!allowed} onClick={() => pick(profile)}>
+                <button type="button" className={`character-card ${selected ? "selected" : ""}`} key={profile.id} onClick={() => pick(profile)}>
                   {src ? <img src={src} alt="" /> : <div className="character-fallback">{profile.name.slice(0, 1)}</div>}
                   <span><strong>{profile.name}</strong><small>{profile.tag || ROLE_LABEL[profile.role]}</small></span>
                 </button>
               );
             })}
-            {!shown.length && <p className="modal-note">No characters in this list yet.</p>}
+            {!profilesForSlot(shown, pickerSlot).length && <p className="modal-note">No characters in this list yet.</p>}
           </div>
           {editing && <div className="voice-editor character-editor">
             <div className="character-avatar-tools">

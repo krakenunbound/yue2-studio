@@ -1,11 +1,13 @@
 """Local API-key vault. Keys never appear in GET responses or logs."""
 from __future__ import annotations
 
+import ipaddress
 import json
 import logging
 import os
 import threading
 import time
+import urllib.parse
 from pathlib import Path
 from typing import Any
 
@@ -23,6 +25,7 @@ PROVIDERS: dict[str, dict[str, Any]] = {
     "openai": {"label": "OpenAI", "jobs": ("writing", "images")},
     "anthropic": {"label": "Anthropic", "jobs": ("writing",)},
     "nvidia": {"label": "NVIDIA NIM", "jobs": ("writing",)},
+    "ollama": {"label": "Local LLM", "jobs": ("writing",)},
     "kling": {"label": "Kling", "jobs": ("video",)},
     "seedance": {"label": "Seedance", "jobs": ("video",)},
 }
@@ -31,9 +34,9 @@ CAPABILITIES: dict[str, dict[str, Any]] = {
     "writing": {
         "label": "Writing",
         "blurb": "Titles, lyrics, and style prompts for YuE2. The local YuE2 model generates the audio.",
-        "providers": ("gemini", "xai", "groq", "openai", "anthropic", "nvidia"),
+        "providers": ("ollama", "gemini", "xai", "groq", "openai", "anthropic", "nvidia"),
         "default_provider": "gemini",
-        "default_model": "gemini-3.5-flash",
+        "default_model": "gemini-3.6-flash",
         "local_ok": False,
     },
     "images": {
@@ -55,6 +58,39 @@ CAPABILITIES: dict[str, dict[str, Any]] = {
 }
 
 LOCAL_MODELS = {"images": "sd15", "video": "visualizer"}
+# A portable default. Users can enter a private LAN IP and port for a server
+# running elsewhere; never ship a workstation-specific address in the app.
+OLLAMA_DEFAULT_URL = "http://127.0.0.1:11434/v1"
+OLLAMA_DEFAULT_MODEL = "gemma3:4b"
+
+
+def normalize_ollama_url(raw: str) -> str:
+    """Accept a LAN OpenAI-compatible root such as http://192.168.1.115:11434/v1."""
+    text = (raw or "").strip()
+    if not text:
+        return ""
+    parsed = urllib.parse.urlparse(text)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise ValueError("Local LLM URL must look like http://127.0.0.1:11434/v1")
+    host = (parsed.hostname or "").lower()
+    if not _lan_host(host):
+        raise ValueError("Local LLM URL must be this computer or a private network address. Do not port-forward it.")
+    path = (parsed.path or "").rstrip("/")
+    if path in {"", "/api"}:
+        path = "/v1"
+    elif not path.endswith("/v1"):
+        path = f"{path}/v1"
+    return urllib.parse.urlunparse((parsed.scheme, parsed.netloc, path, "", "", ""))
+
+
+def _lan_host(host: str) -> bool:
+    if host in {"localhost", "127.0.0.1", "::1"}:
+        return True
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        return host.endswith(".local")
+    return bool(address.is_private or address.is_loopback)
 
 
 def _blank() -> dict[str, Any]:
@@ -80,6 +116,21 @@ def _normalize(raw: dict[str, Any] | None) -> dict[str, Any]:
         if name not in PROVIDERS or not isinstance(entry, dict):
             continue
         key = str(entry.get("key") or "").strip()
+        base_url = str(entry.get("base_url") or "").strip()
+        if name == "ollama":
+            try:
+                base_url = normalize_ollama_url(base_url) if base_url else ""
+            except ValueError:
+                base_url = ""
+            if not base_url:
+                continue
+            data["providers"][name] = {
+                "label": PROVIDERS[name]["label"],
+                "key": key or "ollama",
+                "base_url": base_url,
+                "updated_at": str(entry.get("updated_at") or ""),
+            }
+            continue
         if not key:
             continue
         data["providers"][name] = {
@@ -94,8 +145,13 @@ def _normalize(raw: dict[str, Any] | None) -> dict[str, Any]:
         if provider not in allowed:
             provider = spec["default_provider"]
         model = str(incoming.get("model") or spec["default_model"]).strip() or spec["default_model"]
-        if name == "writing" and provider == "gemini" and model in {"gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"}:
+        # Gemini 2.5 Flash and the earlier 3.5 default are unavailable to this
+        # API project. Migrate them rather than leaving saved writer settings
+        # failing until the user happens to edit them again.
+        if name == "writing" and provider == "gemini" and model in {"gemini-2.5-flash", "gemini-3.5-flash"}:
             model = spec["default_model"]
+        if name == "writing" and provider == "ollama" and not model:
+            model = OLLAMA_DEFAULT_MODEL
         enabled = bool(incoming.get("enabled"))
         if enabled and not _can_enable(data, name, provider):
             enabled = False
@@ -107,6 +163,8 @@ def _can_enable(data: dict[str, Any], capability: str, provider: str) -> bool:
     spec = CAPABILITIES[capability]
     if provider == "local":
         return False
+    if provider == "ollama":
+        return bool((data.get("providers") or {}).get("ollama", {}).get("base_url"))
     return provider in spec["providers"] and bool((data.get("providers") or {}).get(provider, {}).get("key"))
 
 
@@ -162,9 +220,12 @@ def public_view() -> dict[str, Any]:
         "providers": {
             name: {
                 "label": spec["label"],
-                "configured": name in data["providers"],
+                "configured": name in data["providers"] and (
+                    bool(data["providers"][name].get("base_url")) if name == "ollama" else True
+                ),
                 "last4": _last4(data["providers"][name]["key"]) if name in data["providers"] else None,
                 "updated_at": (data["providers"].get(name) or {}).get("updated_at") or None,
+                **({"base_url": data["providers"][name].get("base_url") or ""} if name == "ollama" and name in data["providers"] else {}),
             }
             for name, spec in PROVIDERS.items()
         },
@@ -179,11 +240,16 @@ def status() -> dict[str, Any]:
         provider = cap["provider"]
         configured = provider == "local" or bool((data["providers"].get(provider) or {}).get("key"))
         if name == "writing":
-            configured = any((data["providers"].get(item) or {}).get("key") for item in CAPABILITIES["writing"]["providers"])
+            configured = any(
+                (data["providers"].get(item) or {}).get("base_url") if item == "ollama"
+                else (data["providers"].get(item) or {}).get("key")
+                for item in CAPABILITIES["writing"]["providers"]
+            )
         out[name] = {
             "configured": bool(configured),
             "enabled": bool(cap["enabled"]),
             "provider": provider,
+            "model": cap.get("model") or "",
         }
     return out
 
@@ -197,11 +263,29 @@ def apply_update(body: dict[str, Any]) -> dict[str, Any]:
             if entry.get("clear"):
                 data["providers"].pop(name, None)
                 continue
+            current = dict(data["providers"].get(name) or {})
             key = entry.get("key")
-            if not isinstance(key, str):
+            if isinstance(key, str):
+                key = key.strip()
+                if key and set(key) <= {"•", "*"}:
+                    key = ""
+            else:
+                key = ""
+            if name == "ollama":
+                raw_url = entry.get("base_url")
+                base_url = current.get("base_url") or ""
+                if isinstance(raw_url, str) and raw_url.strip():
+                    base_url = normalize_ollama_url(raw_url)
+                if not base_url:
+                    continue
+                data["providers"][name] = {
+                    "label": PROVIDERS[name]["label"],
+                    "key": key or current.get("key") or "ollama",
+                    "base_url": base_url,
+                    "updated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+                }
                 continue
-            key = key.strip()
-            if not key or set(key) <= {"•", "*"}:
+            if not key:
                 continue
             data["providers"][name] = {
                 "label": PROVIDERS[name]["label"],
@@ -218,9 +302,14 @@ def apply_update(body: dict[str, Any]) -> dict[str, Any]:
             model = str(entry.get("model") if entry.get("model") is not None else current["model"]).strip()
             if provider == "local":
                 model = LOCAL_MODELS.get(name, model)
+            if provider == "ollama" and not model:
+                model = OLLAMA_DEFAULT_MODEL
             enabled = current["enabled"] if entry.get("enabled") is None else bool(entry.get("enabled"))
             if enabled and not _can_enable(data, name, provider):
-                raise ValueError(f"Pick a cloud provider and save its key before enabling {CAPABILITIES[name]['label']}")
+                raise ValueError(
+                    "Save the Local LLM server URL first" if provider == "ollama"
+                    else f"Pick a cloud provider and save its key before enabling {CAPABILITIES[name]['label']}"
+                )
             current["provider"] = provider
             current["model"] = model or CAPABILITIES[name]["default_model"]
             current["enabled"] = enabled
@@ -240,7 +329,18 @@ def require_enabled(capability: str) -> dict[str, Any]:
     provider = cap["provider"]
     if provider == "local":
         raise PermissionError(f"{capability} is set to the local engine")
-    key = (data["providers"].get(provider) or {}).get("key")
+    entry = data["providers"].get(provider) or {}
+    if provider == "ollama":
+        base_url = str(entry.get("base_url") or "")
+        if not base_url:
+            raise PermissionError("No Local LLM server URL saved")
+        return {
+            "provider": provider,
+            "model": cap["model"] or OLLAMA_DEFAULT_MODEL,
+            "key": str(entry.get("key") or "ollama"),
+            "base_url": base_url,
+        }
+    key = entry.get("key")
     if not key:
         raise PermissionError(f"No API key saved for {provider}")
     return {"provider": provider, "model": cap["model"], "key": key}

@@ -2,6 +2,20 @@
 
 All notable changes to YuE2 Studio are documented here. The same notes are used for GitHub releases.
 
+## [0.7.0] — 2026-09-19
+
+### Added
+- **Live** top mode: an automatic song maker as well as a broadcast-style player. It randomly picks a template and vocal or instrumental, automatically starts with random playback-ready songs from the catalog, and maintains a configurable 3/5/8-song ready buffer (5 by default). Live fills the remaining buffer with new generations and keeps making the next song in the background instead of waiting for playback to consume a slot. The setup panel hides once the show starts; the broadcast view shows the current song and a compact numbered playback queue with **Up next** and generated-track positions while one song generates at a time. Vocal songs with lyrics are synchronized before entering playback so the live karaoke layer can follow them. No compatibility filter — odd pairings are allowed. No streaming service or broadcast setup is required.
+- MCP integration for visible, local agent-to-Studio actions. The MCP panel shows connection state and recent activity; the accompanying agent skill documents safe use.
+- Fifteen extra templates filling gaps versus common prompt catalogs: Atlanta trap, Brooklyn drill, East Coast boom bap, pop rap, Latin pop, corridos, reggae, soul R&B, gospel, cafe bossa nova, contemporary folk, heroic trailer cue, fantasy adventure cue, bedtime lullaby, cute character theme. Each has a 320×320 WebP thumbnail like the original 25 (Create, Easy “More templates”, and Live).
+- Writing can use a **Local LLM** (Ollama OpenAI-compatible `/v1` on this PC or the network) instead of a cloud key. Keys → Writing → Local LLM: server URL, model, optional dummy key. Those fields only show when Local LLM is selected. One request at a time.
+- Vocal songs with lyrics automatically run Whisper lyric sync after the thumbnail. Instrumentals skip it. Manual re-sync remains in the song menu.
+- Live writes a Local LLM title (not the template name) plus lyrics, then rolls a vocal cast: female, male, mixed duet, or same-gender duo with two different characters. Character picker only lists voices that fit the open slot (no greyed-out cards). Added 80s hair band and 80s techno templates, plus four more built-in characters.
+- Writing supports a saved private-network Ollama server and Gemma 3 4B recommendation alongside cloud providers. Gemini cloud writing uses the 3.6 Flash default and preserves the fuller co-producer prompt for Easy mode.
+
+### Fixed
+- Live Orbitwave reads the Studio library and grows as songs are added. Rings stay equally spaced (they no longer stretch wider toward the edge). Type is 125px. The playing title is cyan; the newest title is amber. The camera no longer orbits — only the title rings spin.
+
 ## [0.6.2] — 2026-09-13
 
 ### Changed

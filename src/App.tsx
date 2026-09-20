@@ -2,8 +2,9 @@ import LyricPreferencesEditor from "./LyricPreferencesEditor";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import "./App.css";
-import logoUrl from "./assets/yue2-logo-v2.png";
+import logoUrl from "./assets/minimax-music3-logo.png";
 import acousticBluegrassArt from "./assets/templates/acoustic-bluegrass.webp";
 import afrobeatsSunsetArt from "./assets/templates/afrobeats-sunset.webp";
 import ambientTranceArt from "./assets/templates/ambient-trance.webp";
@@ -35,10 +36,15 @@ import SongStudio from "./SongStudio";
 import EffectsPage from "./EffectsPage";
 import ModelsPage from "./ModelsPage";
 import RadioPage from "./RadioPage";
+import LivePage from "./LivePage";
+import SongVisualizer from "./SongVisualizer";
+import OrbitGalaxy from "./OrbitGalaxy";
+import { EXTRA_STYLE_PRESETS, EXTRA_TEMPLATE_ART } from "./extraPresets";
+import type { StylePreset } from "./styleTypes";
 import VoiceProfilesPanel from "./VoiceProfilesPanel";
 import { COVER_LIMITS, coverTitleFor, DEFAULT_LYRICS, EMPTY_VOICE_SLOTS, defaultCreateForm, isCreateFormDirty, melodyOnlyAbc, needsAutoTitle, REMIX_LIMITS, REMIX_NO_SCORE, remixTitleFor, SAMPLE_DESCRIPTION, songHasScore, type VoiceSlots } from "./createForm";
 import type { VoiceProfile } from "./voiceProfiles";
-import { addSongToPlaylist, assistChat, assistWriting, audioUrl, cancelJob, clearMemory, convertAudio, createPlaylist, createWorkspace, deletePlaylist, deleteSong, deleteWorkspace, downloadUrl, extractStems, generate, getJob, getLanStatus, getLibrary, getPlaylists, getSongScore, getStatus, getVoiceProfiles, getWorkspaces, moveSongToWorkspace, openOutputs, openSongFolder, refreshModels, regenerateCover, removeSongFromPlaylist, saveAiKeys, saveLanSettings, synchronizeLyrics, transcribeCover, updateSong, uploadSongCover, videoStudioUrl, type ChatMessage, type Job, type LanStatus, type Playlist, type Song, type Status, type TimedLyricLine, type TimedLyrics, type TimedWord, type Workspace } from "./api";
+import { rateSong, abortWriting, addSongToPlaylist, assistChat, assistWriting, audioUrl, cancelJob, clearMemory, convertAudio, createPlaylist, createWorkspace, deletePlaylist, deleteSong, deleteWorkspace, downloadUrl, extractStems, generate, getJob, getLanStatus, getLibrary, getMcpActivity, getPlaylists, getSongScore, getStatus, getVoiceProfiles, getWorkspaces, moveSongToWorkspace, openOutputs, openSongFolder, refreshModels, regenerateCover, removeSongFromPlaylist, saveAiKeys, saveLanSettings, synchronizeLyrics, transcribeCover, updateSong, uploadSongCover, videoStudioUrl, type ChatMessage, type Job, type LanStatus, type McpActivity, type Playlist, type Song, type Status, type TimedLyrics, type Workspace } from "./api";
 
 const SAMPLE = SAMPLE_DESCRIPTION;
 const EASY_TEMPLATE_PREVIEW = 8;
@@ -53,8 +59,6 @@ const LYRIC_LANGUAGES = [
   ["no", "Norwegian"], ["da", "Danish"], ["fi", "Finnish"], ["pl", "Polish"], ["uk", "Ukrainian"],
   ["ru", "Russian"], ["ja", "Japanese"], ["ko", "Korean"], ["zh", "Chinese"], ["ar", "Arabic"], ["hi", "Hindi"],
 ] as const;
-
-type StylePreset = { genre: string; tempo: string; mood: string; voice: string; arrangement: string; production: string; delivery?: string; instrumental?: boolean; language?: string };
 
 function lyricsLanguageName(code: string) {
   return LYRIC_LANGUAGES.find(([value]) => value === code)?.[1] ?? code;
@@ -113,6 +117,7 @@ const TEMPLATE_ART: Record<string, string> = {
   "J-pop": jPopArt,
   "City pop": cityPopArt,
   "Top 40": top40Art,
+  ...EXTRA_TEMPLATE_ART,
 };
 const STYLE_PRESETS: Record<string, StylePreset> = {
   "Cinematic alt rock": { genre: "Cinematic alternative rock grounded in a real live band, balancing intimate indie-rock restraint with post-rock scale; emotional rather than trailer-like", tempo: "96 BPM, E minor, steady 4/4 with a grounded half-time bridge and no double-time rush", mood: "A close tense confession, determination gathering through the verses, an earned cathartic refrain, a turbulent bridge, then a reflective human resolution", voice: "Singer A (Female), a clear natural alto with warm chest resonance, conversational diction, controlled breath and a trace of rasp only on emotional sustained notes", delivery: "Fully melodic lead singing with restrained intimate verses and a memorable open-throated chorus. Preserve natural phrasing and audible breath; use one low harmony and occasional octave support only at the largest refrain, never a generic choir", arrangement: "A clean electric-guitar figure and close vocal open alone. Bass and dry live drums enter in the first verse; overdriven rhythm guitars widen only at the refrain. Pull back to toms and a single evolving guitar motif in the bridge, then let the final refrain resolve into the original clean figure", production: "Modern organic band recording: close lead vocal, punchy unquantized drums, solid centered bass and broad guitars with believable amplifier texture. Add depth through room and dynamics, not orchestral strings, trailer impacts, synthetic risers, glossy pop stacks or arena-rock excess" },
@@ -140,6 +145,7 @@ const STYLE_PRESETS: Record<string, StylePreset> = {
   "J-pop": { genre: "Japanese, contemporary J-pop with candy-bright chords, city-night energy and a concise verse-chorus form rather than anime-rock or city pop nostalgia", tempo: "136 BPM, A major, bouncy 4/4 with a key-lift last chorus", mood: "Youthful rush, a sparkling pre-chorus, a singalong hook, a brief quiet confession, then a brighter final chorus", voice: "Singer A (Female), a bright light soprano-mezzo with agile Japanese diction, smiling vowels and a youthful upper mix", delivery: "Rapid precise verses, a soaring memorable chorus, one high harmony in the last refrain. No rap, metal shout or operatic belt", arrangement: "Bright piano, tight drums and a bouncing bass open. Synths and handclaps widen the pre-chorus; electric guitar doubles the hook. Drop to piano and voice for the bridge, then a key-lift final chorus", production: "Glossy J-pop mix, present vocal, sparkling highs, punchy drums. No lo-fi tape, dark industrial, country steel or festival EDM drop", language: "ja" },
   "City pop": { genre: "Japanese, 1980s city pop, upbeat and danceable, groovy bass, electric guitar, bright synths, joyful neon-city night rather than modern J-pop or disco parody", tempo: "118 BPM, F major, relaxed four-on-the-floor with a slinky bass syncopation", mood: "Neon dusk, carefree motion, a luminous singalong refrain, a short guitar-and-synth break, then a glowing boulevard fade", voice: "Singer A (Female), a warm clear mezzo with joyful Japanese phrasing, easy upper register and unhurried city-night cool", delivery: "Fully melodic, danceable verses, a memorable chorus. Light unison doubles, no choir", arrangement: "Groovy electric bass and clean guitar establish the night. Bright analog synths, tight drums and muted brass stabs enter by the first chorus. A short guitar-and-synth break, then the chorus returns and fades on bass and pads", production: "Warm analog 80s mix, rounded bass, glossy but not harsh top, vinyl-era stereo. No trap hats, EDM snare rush, metal guitars or orchestral trailer hits", language: "ja" },
   "Top 40": { genre: "English, contemporary Top 40 pop, radio-ready verse-pre-chorus-chorus, hook-first rather than indie, EDM festival, or singer-songwriter folk", tempo: "102 BPM, C major, mid-tempo 4/4 with a post-chorus chant", mood: "Immediate catchiness, a rising pre-chorus, an addictive hook, a cooler bridge, then a double chorus built for radio", voice: "Singer A (Female), a clear contemporary pop mezzo with radio diction, controlled belt and a memorable hook voice", delivery: "Compact tuneful verses, a lift into the pre-chorus, a chantable chorus. One tight harmony stack on the last chorus only", arrangement: "Punchy drums, rounded bass and a simple guitar or piano figure from the start. Pre-chorus adds claps and a rising synth; chorus opens wide. Bridge strips to voice and a pulse, then the final double chorus", production: "Loud clean radio mix, vocal-forward, tight low end, polished stereo. No underground techno, opera hall, country steel, metal distortion or lo-fi vinyl" },
+  ...EXTRA_STYLE_PRESETS,
 };
 
 const VOCAL_PROFILES: Record<string, string> = {
@@ -416,150 +422,9 @@ function timingLabel(job: Job) {
   return remaining ? `${elapsedLabel(job)} elapsed · ${remaining}` : `${elapsedLabel(job)} elapsed`;
 }
 
-function playbackTime(value: number) {
-  if (!Number.isFinite(value) || value < 0) return "0:00";
-  const seconds = Math.floor(value);
-  return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
-}
-
-function displayWords(line: TimedLyricLine): TimedWord[] {
-  if (line.words?.length) return line.words;
-  const words = line.text.trim().split(/\s+/).filter(Boolean);
-  const span = Math.max(0.18, line.end - line.start);
-  return words.map((text, index) => ({ text, start: line.start + (span * index / words.length), end: index === words.length - 1 ? line.end : line.start + (span * (index + 1) / words.length) }));
-}
-
-function KaraokeLyrics({ lyrics, currentTime }: { lyrics?: TimedLyrics | null; currentTime: number }) {
-  const lines = lyrics?.lines ?? [];
-  if (!lines.length) return null;
-  const performingIndex = lines.findIndex((line) => currentTime >= line.start - 0.12 && currentTime <= line.end + 0.16);
-  let focusIndex = performingIndex;
-  if (focusIndex < 0) {
-    const upcoming = lines.findIndex((line) => line.start > currentTime);
-    focusIndex = upcoming >= 0 ? upcoming : lines.length - 1;
-  }
-  const lineHeight = 76;
-  return <section className="karaoke" aria-label="Synchronized lyrics">
-    <div className="karaoke-focus" aria-hidden="true" />
-    <div className="karaoke-track" style={{ transform: `translateY(${104 - focusIndex * lineHeight}px)` }}>
-      {lines.map((line, index) => <div className={`karaoke-line ${index === performingIndex ? "active" : currentTime > line.end + 0.16 ? "past" : "future"}`} key={`${line.index}-${line.start}`}>
-        <div className="karaoke-original">{displayWords(line).map((word, wordIndex) => {
-          const state = currentTime >= word.end ? "sung" : currentTime >= word.start ? "singing" : "waiting";
-          return <span className={state} key={`${word.start}-${wordIndex}`}>{word.text}{wordIndex < displayWords(line).length - 1 ? " " : ""}</span>;
-        })}</div>
-        {line.translation && <div className="karaoke-translation">{line.translation}</div>}
-      </div>)}
-    </div>
-  </section>;
-}
-
-function SongVisualizer({ src, timedLyrics, onEnded }: { src: string; timedLyrics?: TimedLyrics | null; onEnded: () => void }) {
-  const audio = useRef<HTMLAudioElement>(null);
-  const canvas = useRef<HTMLCanvasElement>(null);
-  const [isPlaying, setIsPlaying] = useState(true);
-  const [currentTime, setCurrentTime] = useState(0);
-  const [totalTime, setTotalTime] = useState(0);
-  const [volume, setVolume] = useState(1);
-  const [lyricsVisible, setLyricsVisible] = useState(() => localStorage.getItem("yue2-lyrics-visible") !== "false");
-  const hasTimedLyrics = Boolean(timedLyrics?.lines?.length);
-  useEffect(() => {
-    const element = audio.current; const surface = canvas.current;
-    if (!element || !surface || !src) return;
-    let context: AudioContext | null = null;
-    let analyser: AnalyserNode | null = null;
-    let source: MediaElementAudioSourceNode | null = null;
-    let data = new Uint8Array(64);
-    const paint = surface.getContext("2d");
-    let frame = 0;
-    let blobUrl: string | null = null;
-    let cancelled = false;
-    const beginAnalysis = async () => {
-      if (context) { if (context.state === "suspended") await context.resume(); return; }
-      context = new AudioContext();
-      analyser = context.createAnalyser();
-      analyser.fftSize = 128;
-      analyser.smoothingTimeConstant = 0.78;
-      source = context.createMediaElementSource(element);
-      source.connect(analyser);
-      analyser.connect(context.destination);
-      data = new Uint8Array(analyser.frequencyBinCount);
-      await context.resume();
-    };
-    const draw = () => {
-      frame = requestAnimationFrame(draw);
-      analyser?.getByteFrequencyData(data);
-      const ratio = window.devicePixelRatio || 1; const width = surface.clientWidth; const height = surface.clientHeight;
-      if (surface.width !== width * ratio || surface.height !== height * ratio) { surface.width = width * ratio; surface.height = height * ratio; paint?.setTransform(ratio, 0, 0, ratio, 0, 0); }
-      if (!paint) return; paint.clearRect(0, 0, width, height);
-      const bars = 42; const gap = 3; const barWidth = Math.max(2, (width - gap * (bars - 1)) / bars);
-      const gradient = paint.createLinearGradient(0, height, width, 0); gradient.addColorStop(0, "#55e6ee"); gradient.addColorStop(.58, "#7d65f4"); gradient.addColorStop(1, "#b654ff"); paint.fillStyle = gradient;
-      for (let index = 0; index < bars; index += 1) {
-        const sample = data[Math.floor(index * data.length / bars)] / 255;
-        const barHeight = Math.max(2, sample * height);
-        paint.fillRect(index * (barWidth + gap), height - barHeight, barWidth, barHeight);
-      }
-    };
-    const start = async () => {
-      try {
-        const response = await fetch(src);
-        const blob = await response.blob();
-        if (cancelled) return;
-        blobUrl = URL.createObjectURL(blob);
-        element.src = blobUrl;
-      } catch {
-        if (cancelled) return;
-        element.src = src;
-      }
-      try { await element.play(); } catch { /* autoplay can wait for the transport button */ }
-    };
-    element.crossOrigin = "anonymous";
-    element.addEventListener("play", beginAnalysis);
-    draw();
-    void start();
-    return () => {
-      cancelled = true;
-      element.removeEventListener("play", beginAnalysis);
-      cancelAnimationFrame(frame);
-      try { source?.disconnect(); analyser?.disconnect(); } catch { /* already disconnected */ }
-      if (context) void context.close();
-      if (blobUrl) URL.revokeObjectURL(blobUrl);
-    };
-  }, [src]);
-  useEffect(() => {
-    const element = audio.current; if (!element) return;
-    const updateTime = () => setCurrentTime(element.currentTime || 0);
-    const updateDuration = () => setTotalTime(Number.isFinite(element.duration) ? element.duration : 0);
-    const playingNow = () => setIsPlaying(true); const pausedNow = () => setIsPlaying(false);
-    let animationFrame = 0;
-    const followPlayback = () => { if (!element.paused) setCurrentTime(element.currentTime || 0); animationFrame = requestAnimationFrame(followPlayback); };
-    element.addEventListener("timeupdate", updateTime); element.addEventListener("durationchange", updateDuration); element.addEventListener("loadedmetadata", updateDuration); element.addEventListener("play", playingNow); element.addEventListener("pause", pausedNow);
-    animationFrame = requestAnimationFrame(followPlayback);
-    return () => { cancelAnimationFrame(animationFrame); element.removeEventListener("timeupdate", updateTime); element.removeEventListener("durationchange", updateDuration); element.removeEventListener("loadedmetadata", updateDuration); element.removeEventListener("play", playingNow); element.removeEventListener("pause", pausedNow); };
-  }, [src]);
-  const togglePlayback = () => { const element = audio.current; if (!element) return; if (element.paused) void element.play(); else element.pause(); };
-  const stopPlayback = () => { const element = audio.current; if (!element) return; element.pause(); element.currentTime = 0; setCurrentTime(0); setIsPlaying(false); };
-  const seek = (value: number) => { const element = audio.current; if (!element) return; element.currentTime = value; setCurrentTime(value); };
-  const changeVolume = (value: number) => { const element = audio.current; if (!element) return; element.volume = value; setVolume(value); };
-  const toggleLyrics = () => setLyricsVisible((visible) => { const next = !visible; localStorage.setItem("yue2-lyrics-visible", String(next)); return next; });
-  return <div className={`song-visualizer ${lyricsVisible && hasTimedLyrics ? "lyrics-visible" : "lyrics-hidden"}`}>
-    {lyricsVisible && <KaraokeLyrics lyrics={timedLyrics} currentTime={currentTime} />}
-    <canvas ref={canvas} />
-    <div className="song-transport">
-      <button className="transport-play" aria-label={isPlaying ? "Pause" : "Play"} title={isPlaying ? "Pause" : "Play"} onClick={togglePlayback}>{isPlaying ? "Ⅱ" : "▶"}</button>
-      <button className="transport-stop" aria-label="Stop and return to the beginning" title="Stop and return to 0:00" onClick={stopPlayback}>■</button>
-      <button className={`transport-lyrics ${lyricsVisible && hasTimedLyrics ? "active" : ""}`} disabled={!hasTimedLyrics} aria-label={`${lyricsVisible ? "Hide" : "Show"} synchronized lyrics`} aria-pressed={lyricsVisible && hasTimedLyrics} title={hasTimedLyrics ? `${lyricsVisible ? "Hide" : "Show"} synchronized lyrics` : "This song has no synchronized lyrics"} onClick={toggleLyrics}>Lyrics</button>
-      <time>{playbackTime(currentTime)}</time>
-      <input className="transport-seek" aria-label="Song position" type="range" min="0" max={Math.max(totalTime, 0.01)} step="0.01" value={Math.min(currentTime, Math.max(totalTime, 0.01))} onChange={(event) => seek(Number(event.target.value))} style={{ "--seek": `${totalTime ? (currentTime / totalTime) * 100 : 0}%` } as React.CSSProperties} />
-      <time>{playbackTime(totalTime)}</time>
-      <span className="transport-volume-icon" aria-hidden="true">VOL</span>
-      <input className="transport-volume" aria-label="Volume" type="range" min="0" max="1" step="0.01" value={volume} onChange={(event) => changeVolume(Number(event.target.value))} style={{ "--volume": `${volume * 100}%` } as React.CSSProperties} />
-    </div>
-    <audio ref={audio} preload="auto" crossOrigin="anonymous" onEnded={() => { setIsPlaying(false); setCurrentTime(0); onEnded(); }} />
-  </div>;
-}
-
 export default function App() {
   const [status, setStatus] = useState<Status | null>(null);
+  const [mcpActivity, setMcpActivity] = useState<McpActivity[]>([]);
   const [songs, setSongs] = useState<Song[]>([]);
   const [playlists, setPlaylists] = useState<Playlist[]>([]);
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
@@ -587,6 +452,10 @@ export default function App() {
   const [error, setError] = useState("");
   const [serviceReachable, setServiceReachable] = useState(true);
   const [playing, setPlaying] = useState<string | null>(null);
+  const [galaxyEnabled, setGalaxyEnabled] = useState(() => localStorage.getItem("yue2-orbitwave-enabled") !== "off");
+  const [liveAnalyser, setLiveAnalyser] = useState<AnalyserNode | null>(null);
+  const [livePlaying, setLivePlaying] = useState(false);
+  const [liveCurrentId, setLiveCurrentId] = useState<string | null>(null);
   const [expandedStems, setExpandedStems] = useState<string | null>(null);
   const [audioSources, setAudioSources] = useState<Record<string, string>>({});
   const [coverSources, setCoverSources] = useState<Record<string, string>>({});
@@ -606,6 +475,7 @@ export default function App() {
   const [editTranslation, setEditTranslation] = useState("");
   const [editLyricsLanguage, setEditLyricsLanguage] = useState("en");
   const [deleteTargets, setDeleteTargets] = useState<Song[]>([]);
+  const [releasingSongIds, setReleasingSongIds] = useState<string[]>([]);
   const [deleteError, setDeleteError] = useState("");
   const [selectedSongIds, setSelectedSongIds] = useState<string[]>([]);
   const [bulkMenu, setBulkMenu] = useState<"playlist" | "workspace" | "download" | null>(null);
@@ -627,7 +497,7 @@ export default function App() {
   const [coverKeepLyrics, setCoverKeepLyrics] = useState(true);
   const [coverSongTitle, setCoverSongTitle] = useState("");
   const [libraryBusy, setLibraryBusy] = useState(false);
-  const [studioView, setStudioView] = useState<"create" | "library" | "radio" | "effects" | "models">("create");
+  const [studioView, setStudioView] = useState<"create" | "library" | "radio" | "live" | "effects" | "models">("create");
   const initialSetupChecked = useRef(false);
   const [systemOpen, setSystemOpen] = useState(false);
   const [keysOpen, setKeysOpen] = useState(false);
@@ -642,7 +512,7 @@ export default function App() {
   const [lyricError, setLyricError] = useState("");
   const [translateBusy, setTranslateBusy] = useState(false);
   const [refreshingModels, setRefreshingModels] = useState(false);
-  const [rightDrawer, setRightDrawer] = useState<"job" | "details" | null>(null);
+  const [rightDrawer, setRightDrawer] = useState<"job" | "details" | "mcp" | null>(null);
   const [selectedSongId, setSelectedSongId] = useState<string | null>(null);
   const [editorSong, setEditorSong] = useState<Song | null>(null);
   const [editorSource, setEditorSource] = useState("");
@@ -652,7 +522,7 @@ export default function App() {
   const createJobEpoch = useRef(0);
   const coverUploadInput = useRef<HTMLInputElement>(null);
   const [leftDrawerWidth, setLeftDrawerWidth] = useState(() => Number(localStorage.getItem("yue2-left-drawer-width")) || 420);
-  const [rightDrawerWidth, setRightDrawerWidth] = useState(() => Number(localStorage.getItem("yue2-right-drawer-width")) || 420);
+  const rightDrawerWidth = leftDrawerWidth;
   const [promptHelpOpen, setPromptHelpOpen] = useState(false);
   const [templatesOpen, setTemplatesOpen] = useState(false);
   const [moreOptions, setMoreOptions] = useState(false);
@@ -693,6 +563,9 @@ export default function App() {
   const studioStemKick = useRef("");
   const composerRef = useRef<HTMLDivElement | null>(null);
   const chatInputRef = useRef<HTMLTextAreaElement | null>(null);
+  const writingBusyRef = useRef(false);
+  const writingEpochRef = useRef(0);
+  const generationSubmitRef = useRef(false);
   const [sendNudge, setSendNudge] = useState(0);
   const [songIdea, setSongIdea] = useState("");
   const [composeBusy, setComposeBusy] = useState(false);
@@ -700,6 +573,7 @@ export default function App() {
   const [captionBusy, setCaptionBusy] = useState(false);
   const [captionError, setCaptionError] = useState("");
   const [captionRefs, setCaptionRefs] = useState("");
+  const [writingBusy, setWritingBusy] = useState(false);
   const [downloadNotice, setDownloadNotice] = useState("");
   const downloadNoticeTimer = useRef<number | null>(null);
   const [voiceProfiles, setVoiceProfiles] = useState<VoiceProfile[]>([]);
@@ -717,12 +591,13 @@ export default function App() {
   }, []);
 
   async function refresh() {
-    const [nextStatus, library, playlistData, workspaceData, voices] = await Promise.all([
+    const [nextStatus, library, playlistData, workspaceData, voices, activity] = await Promise.all([
       getStatus(), getLibrary(), getPlaylists(), getWorkspaces(),
       getVoiceProfiles(true).catch(() => ({ items: [] as VoiceProfile[] })),
+      getMcpActivity().catch(() => ({ items: [] as McpActivity[] })),
     ]);
     setServiceReachable(true);
-    setStatus(nextStatus); setSongs(library.items); setPlaylists(playlistData.items); setWorkspaces(workspaceData.items); setVoiceProfiles(voices.items);
+    setStatus(nextStatus); setSongs(library.items); setPlaylists(playlistData.items); setWorkspaces(workspaceData.items); setVoiceProfiles(voices.items); setMcpActivity(activity.items);
     if (!initialSetupChecked.current) {
       initialSetupChecked.current = true;
       if (!nextStatus.model.ready) setStudioView("models");
@@ -737,19 +612,19 @@ export default function App() {
   function beginDrawerResize(side: "left" | "right", event: React.PointerEvent) {
     event.preventDefault();
     const startX = event.clientX;
-    const startWidth = side === "left" ? leftDrawerWidth : rightDrawerWidth;
+    const startWidth = leftDrawerWidth;
     const maximum = Math.max(360, Math.min(960, window.innerWidth - 110));
     let finalWidth = startWidth;
     document.body.classList.add("resizing-drawer");
     const move = (moveEvent: PointerEvent) => {
       const delta = moveEvent.clientX - startX;
       finalWidth = Math.max(320, Math.min(maximum, startWidth + (side === "left" ? delta : -delta)));
-      if (side === "left") setLeftDrawerWidth(finalWidth); else setRightDrawerWidth(finalWidth);
+      setLeftDrawerWidth(finalWidth);
     };
     const stop = () => {
       window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", stop);
       document.body.classList.remove("resizing-drawer");
-      localStorage.setItem(`yue2-${side}-drawer-width`, String(Math.round(finalWidth)));
+      localStorage.setItem("yue2-left-drawer-width", String(Math.round(finalWidth)));
     };
     window.addEventListener("pointermove", move); window.addEventListener("pointerup", stop, { once: true });
   }
@@ -767,8 +642,31 @@ export default function App() {
       }
     };
     void boot();
-    const timer = window.setInterval(() => void getStatus().then((next) => { setStatus(next); setServiceReachable(true); }).catch(() => setServiceReachable(false)), 3000);
+    const timer = window.setInterval(() => void Promise.all([getStatus(), getMcpActivity()]).then(([next, activity]) => { setStatus(next); setMcpActivity(activity.items); setServiceReachable(true); }).catch(() => setServiceReachable(false)), 3000);
     return () => { stopped = true; window.clearInterval(timer); };
+  }, []);
+
+  useEffect(() => {
+    if (!("__TAURI_INTERNALS__" in window)) return;
+    let toggling = false;
+    const toggleFullscreen = async (event: KeyboardEvent) => {
+      if (event.key !== "F11" || event.repeat || toggling) return;
+      event.preventDefault();
+      toggling = true;
+      const appWindow = getCurrentWindow();
+      try {
+        const fullscreen = await appWindow.isFullscreen();
+        const nextFullscreen = !fullscreen;
+        await appWindow.setDecorations(!nextFullscreen);
+        await appWindow.setFullscreen(nextFullscreen);
+      } catch (reason) {
+        console.error("Could not toggle F11 fullscreen", reason);
+      } finally {
+        toggling = false;
+      }
+    };
+    window.addEventListener("keydown", toggleFullscreen);
+    return () => window.removeEventListener("keydown", toggleFullscreen);
   }, []);
 
   useEffect(() => {
@@ -929,6 +827,8 @@ export default function App() {
   const selectedSong = songs.find((song) => song.id === selectedSongId) ?? null;
   const activeEditorSong = editorSong ? (songs.find((song) => song.id === editorSong.id) ?? editorSong) : null;
   const displayJob = utilityJob && ["queued", "running"].includes(utilityJob.status) ? utilityJob : generationJob ?? utilityJob;
+  const latestMcpConnection = mcpActivity.find((item) => item.tool === "connection");
+  const mcpConnected = latestMcpConnection?.status === "connected";
   const studioStemJob = status?.jobs.find((job) => job.kind === "stems" && ["queued", "running"].includes(job.status))
     ?? (utilityJob?.kind === "stems" ? utilityJob : null);
   useEffect(() => {
@@ -949,6 +849,45 @@ export default function App() {
   const writing = status?.ai?.writing;
   const writingConfigured = Boolean(writing?.configured);
   const writingEnabled = Boolean(writing?.enabled);
+  const writingSource = !writingEnabled ? "Writing helper is off"
+    : writing?.provider === "ollama" ? `Local LLM · ${writing.model || "gemma3:4b"}`
+    : writing?.provider === "gemini" ? `Google Gemini · ${writing.model || "gemini-3.6-flash"}`
+    : `${writing?.provider || "cloud"} · ${writing?.model || "default"}`;
+  const writingIdleNote = !writingEnabled ? ""
+    : writing?.provider === "ollama" ? "YuE2 GPU stays idle until the song starts"
+    : "cloud — YuE2 GPU stays idle until the song starts";
+
+  function beginWriting() {
+    if (writingBusyRef.current) return false;
+    writingBusyRef.current = true;
+    setWritingBusy(true);
+    return true;
+  }
+
+  function endWriting(epoch?: number) {
+    if (epoch != null && epoch !== writingEpochRef.current) return;
+    writingBusyRef.current = false;
+    setWritingBusy(false);
+  }
+
+  async function cancelWriting() {
+    chatEpoch.current += 1;
+    setChatBusy(false);
+    setChatPhase("");
+    createJobEpoch.current += 1;
+    writingEpochRef.current += 1;
+    endWriting();
+    setLyricBusy(false);
+    setComposeBusy(false);
+    setCaptionBusy(false);
+    setTranslateBusy(false);
+    try { await abortWriting(); } catch { /* the request may already have finished */ }
+  }
+
+  async function changeStudioView(next: typeof studioView) {
+    if (next !== studioView && writingBusyRef.current) await cancelWriting();
+    setStudioView(next);
+  }
 
   function openLyricAssist(source: "create" | "edit", mode: "generate" | "optimize") {
     const currentLyrics = source === "edit" ? editLyrics : lyrics;
@@ -974,6 +913,8 @@ export default function App() {
   async function runLyricAssist(random = false) {
     if (!lyricAssist) return;
     if (lyricAvoidDirty) { setLyricError("Save your avoid list before writing."); return; }
+    if (!beginWriting()) return;
+    const writingEpoch = writingEpochRef.current;
     setLyricBusy(true); setLyricError("");
     try {
       if (writingConfigured && !writingEnabled) {
@@ -991,13 +932,14 @@ export default function App() {
         lyrics: existing.lyrics || (sourceCreate ? lyrics : editLyrics),
         language: sourceCreate ? lyricsLanguage : editLyricsLanguage,
       });
+      if (writingEpoch !== writingEpochRef.current) return;
       const cleaned = unwrapWriting(result.lyrics || "");
       setLyricPreview(cleaned.lyrics);
       setLyricPreviewTitle((result.title || cleaned.title || "").trim());
       setLyricPreviewDescription((result.description || cleaned.description || "").trim());
     } catch (reason: any) {
-      setLyricError(reason?.message ?? String(reason));
-    } finally { setLyricBusy(false); }
+      if (writingEpoch === writingEpochRef.current) setLyricError(reason?.message ?? String(reason));
+    } finally { if (writingEpoch === writingEpochRef.current) setLyricBusy(false); endWriting(writingEpoch); }
   }
 
   async function translateLyricsToEnglish(source: "create" | "edit" | "easy") {
@@ -1012,6 +954,8 @@ export default function App() {
       setError("Save a Writing key in KEYS, then translate to English.");
       return;
     }
+    if (!beginWriting()) return;
+    const writingEpoch = writingEpochRef.current;
     setTranslateBusy(true);
     setError("");
     setChatError("");
@@ -1027,6 +971,7 @@ export default function App() {
         description: source === "edit" ? editDescription : description,
         language: "en",
       });
+      if (writingEpoch !== writingEpochRef.current) return;
       const translated = (result.lyrics || "").trim();
       if (!translated) throw new Error("The writing model returned an empty translation.");
       if (source === "edit") setEditTranslation(translated);
@@ -1048,13 +993,17 @@ export default function App() {
           english_translation: translated,
           lyrics_language: song.lyrics_language || lyricsLanguage,
         });
+        if (writingEpoch !== writingEpochRef.current) return;
         await refresh();
       }
     } catch (reason: any) {
-      const message = reason?.message ?? String(reason);
-      if (source === "easy") setChatError(message); else setError(message);
+      if (writingEpoch === writingEpochRef.current) {
+        const message = reason?.message ?? String(reason);
+        if (source === "easy") setChatError(message); else setError(message);
+      }
     } finally {
-      setTranslateBusy(false);
+      if (writingEpoch === writingEpochRef.current) setTranslateBusy(false);
+      endWriting(writingEpoch);
     }
   }
 
@@ -1080,6 +1029,12 @@ export default function App() {
   // Easy mode already holds fresh values that React state has not committed
   // yet, so generation accepts explicit overrides instead of reading state.
   async function startGeneration(overrides?: { title?: string; description?: string; lyrics?: string; instrumental?: boolean; lyricsLanguage?: string }) {
+    if (generationSubmitRef.current) return;
+    const ownsWriting = !overrides;
+    if (ownsWriting && !beginWriting()) return;
+    const writingEpoch = writingEpochRef.current;
+    generationSubmitRef.current = true;
+    const epoch = createJobEpoch.current;
     setError("");
     try {
       const seed = lockedSeed.trim() === "" ? null : Number.parseInt(lockedSeed, 10);
@@ -1108,11 +1063,17 @@ export default function App() {
         });
         songTitle = (named.title || "").trim();
         if (needsAutoTitle(songTitle)) throw new Error("Writing did not return a song title. Type one and try again.");
+        if (epoch !== createJobEpoch.current) return;
         setTitle(songTitle);
       }
+      if (epoch !== createJobEpoch.current) return;
       const result = await generate({ title: songTitle, artist: cleanArtist, album: album.trim(), genre: genre.trim(), description: productionDescription, lyrics: instrumentalSong ? "" : sourceLyrics, english_translation: instrumentalSong ? "" : englishTranslation, lyrics_language: language, instrumental: instrumentalSong, seed: Number.isFinite(seed) ? seed : null, cot_mode: cotMode, abc_score: abcScore.trim() || undefined, cfg, steps, top_k: topK, temperature, exclude_styles: excludeStyles.trim(), vocal_gender: vocalGender, voice_slots: instrumentalSong ? EMPTY_VOICE_SLOTS : voiceSlots });
       setGenerationJob(result.job);
     } catch (reason: any) { setError(reason?.message ?? String(reason)); }
+    finally {
+      generationSubmitRef.current = false;
+      if (ownsWriting) endWriting(writingEpoch);
+    }
   }
 
   function choosePreset(name: string) {
@@ -1130,6 +1091,9 @@ export default function App() {
 
   function resetEasySession() {
     chatEpoch.current += 1;
+    writingEpochRef.current += 1;
+    endWriting();
+    void abortWriting().catch(() => undefined);
     setChatMessages([]);
     setChatInput("");
     setLastEasyPrompt("");
@@ -1152,6 +1116,9 @@ export default function App() {
   async function cancelEasyCreate() {
     createJobEpoch.current += 1;
     chatEpoch.current += 1;
+    writingEpochRef.current += 1;
+    endWriting();
+    void abortWriting().catch(() => undefined);
     const jobId = generationJob && ["queued", "running"].includes(generationJob.status) ? generationJob.id : "";
     setChatBusy(false);
     setChatPhase("");
@@ -1201,10 +1168,13 @@ export default function App() {
       setChatError("Save a Writing key in KEYS first — Easy mode runs on it.");
       return;
     }
+    if (!beginWriting()) return;
+    const writingEpoch = writingEpochRef.current;
     setChatInput(content);
     setSendNudge(0);
     const alreadyMade = Boolean(chatStyle) || Boolean(generationJob);
     if (alreadyMade && content === lastEasyPrompt.trim()) {
+      endWriting(writingEpoch);
       rerunEasySong();
       return;
     }
@@ -1225,37 +1195,49 @@ export default function App() {
       const turn = await assistChat({ messages: thread, language, instrumental: wantInstrumental });
       if (!stillThisTurn()) return;
       setChatMessages([...thread, { role: "assistant", content: turn.reply }]);
-      // It decided it needed to ask something first. Let the user answer.
-      if (!turn.ready || !turn.brief.trim()) return;
+      if (!turn.ready) return;
+      const brief = (turn.brief || "").trim() || content;
       if (!ready) { setChatError("YuE2 is not ready yet, so I wrote the song but cannot generate it."); }
 
       // Two model calls, awaited separately. Composing them server-side meant
       // nothing reached the screen for ~16s; this puts the Style card up as
       // soon as the caption exists, roughly halfway.
       setChatPhase("writing");
-      const styled = await assistWriting({
-        action: "describe", idea: turn.brief, title: "",
-        language, instrumental: wantInstrumental,
-      });
-      if (!stillThisTurn()) return;
-      const caption = (styled.description || "").trim();
-      if (!caption) throw new Error("The writing model returned an empty description.");
+      let caption = "";
+      try {
+        const styled = await assistWriting({
+          action: "describe", idea: brief, title: "",
+          language, instrumental: wantInstrumental,
+        });
+        if (!stillThisTurn()) return;
+        caption = (styled.description || "").trim();
+        setCaptionRefs(styled.references || "");
+      } catch (reason: any) {
+        if (!stillThisTurn()) return;
+        throw new Error(`Music description writing failed: ${reason?.message ?? String(reason)}`);
+      }
+      if (!caption) throw new Error("Music description writing returned an empty result.");
       setDescription(caption);
-      setCaptionRefs(styled.references || "");
       setChatStyle(caption);
 
       let written = "";
       let nextTitle = "";
       if (!wantInstrumental) {
         setChatPhase("lyrics");
-        const song = await assistWriting({
-          action: "generate", idea: turn.brief, title: "",
-          description: caption, language,
-        });
-        if (!stillThisTurn()) return;
-        written = (song.lyrics || "").trim();
-        nextTitle = (song.title || "").trim();
-        if (written) setLyrics(written);
+        try {
+          const song = await assistWriting({
+            action: "generate", idea: brief, title: "",
+            description: caption, language,
+          });
+          if (!stillThisTurn()) return;
+          written = (song.lyrics || "").trim();
+          nextTitle = (song.title || "").trim();
+        } catch (reason: any) {
+          if (!stillThisTurn()) return;
+          throw new Error(`Lyrics writing failed: ${reason?.message ?? String(reason)}`);
+        }
+        if (!written) throw new Error("Lyrics writing returned an empty result.");
+        setLyrics(written);
         setChatLyrics(written);
       }
       if (nextTitle) setTitle(nextTitle);
@@ -1267,6 +1249,7 @@ export default function App() {
       if (stillThisTurn()) setChatError(reason?.message ?? String(reason));
     } finally {
       if (stillThisTurn()) { setChatBusy(false); setChatPhase(""); }
+      endWriting(writingEpoch);
     }
   }
 
@@ -1301,6 +1284,8 @@ export default function App() {
       setComposeError("Save a Writing key in KEYS to use this.");
       return;
     }
+    if (!beginWriting()) return;
+    const writingEpoch = writingEpochRef.current;
     setComposeBusy(true); setComposeError(""); setCaptionRefs("");
     try {
       if (!writingEnabled) {
@@ -1314,6 +1299,7 @@ export default function App() {
         language: lyricsLanguage,
         instrumental,
       });
+      if (writingEpoch !== writingEpochRef.current) return;
       const caption = (result.description || "").trim();
       if (caption) setDescription(applyDescriptionControls(caption, instrumental, vocalGender, excludeStyles));
       const written = (result.lyrics || "").trim();
@@ -1322,8 +1308,8 @@ export default function App() {
       if (nextTitle && needsAutoTitle(title)) setTitle(nextTitle);
       setCaptionRefs(result.references || "");
     } catch (reason: any) {
-      setComposeError(reason?.message ?? String(reason));
-    } finally { setComposeBusy(false); }
+      if (writingEpoch === writingEpochRef.current) setComposeError(reason?.message ?? String(reason));
+    } finally { if (writingEpoch === writingEpochRef.current) setComposeBusy(false); endWriting(writingEpoch); }
   }
 
   // Ask the writing model for a compact YuE2 style line.
@@ -1358,6 +1344,8 @@ export default function App() {
       setError("Save a Writing key in KEYS, then use Write it with AI.");
       return;
     }
+    if (!beginWriting()) return;
+    const writingEpoch = writingEpochRef.current;
     setCaptionBusy(true); setCaptionError(""); setCaptionRefs("");
     try {
       if (!writingEnabled) {
@@ -1372,14 +1360,15 @@ export default function App() {
         lyrics,
         language: lyricsLanguage,
       });
+      if (writingEpoch !== writingEpochRef.current) return;
       const caption = (result.description || "").trim();
       if (!caption) throw new Error("The writing model returned an empty description.");
       setDescription(applyDescriptionControls(caption, instrumental, vocalGender, excludeStyles));
       setCaptionRefs(result.references || "");
       setPromptHelpOpen(false);
     } catch (reason: any) {
-      setCaptionError(reason?.message ?? String(reason));
-    } finally { setCaptionBusy(false); }
+      if (writingEpoch === writingEpochRef.current) setCaptionError(reason?.message ?? String(reason));
+    } finally { if (writingEpoch === writingEpochRef.current) setCaptionBusy(false); endWriting(writingEpoch); }
   }
 
   function applyPromptHelp() {
@@ -1789,12 +1778,15 @@ export default function App() {
   }
 
   async function removeSong() {
-    if (!deleteTargets.length) return;
+    if (!deleteTargets.length || libraryBusy) return;
     const targets = deleteTargets;
     setLibraryBusy(true); setError("");
     setDeleteError("");
     try {
+      setReleasingSongIds(targets.map((song) => song.id));
       if (targets.some((song) => song.id === playing)) setPlaying(null);
+      if (targets.some((song) => song.id === editorSong?.id)) { setEditorSong(null); setEditorSource(""); }
+      if (targets.some((song) => song.id === videoTool?.song.id)) setVideoTool(null);
       setAudioSources((current) => { const next = { ...current }; for (const song of targets) delete next[song.id]; return next; });
       setCoverSources((current) => { const next = { ...current }; for (const song of targets) delete next[song.id]; return next; });
       await new Promise<void>((resolve) => window.requestAnimationFrame(() => window.requestAnimationFrame(() => window.setTimeout(resolve, 50))));
@@ -1805,7 +1797,7 @@ export default function App() {
       setSelectedSongIds((current) => current.filter((id) => !removed.has(id)));
       await refresh(); setDeleteTargets([]);
     } catch (reason: any) { setDeleteError(reason?.message ?? String(reason)); }
-    finally { setLibraryBusy(false); }
+    finally { setReleasingSongIds([]); setLibraryBusy(false); }
   }
 
   function toggleSongChecked(id: string) {
@@ -1893,6 +1885,21 @@ export default function App() {
     finally { setLibraryBusy(false); }
   }
 
+  function newPlaylistForSong(song: Song) {
+    setOpenMenu(null); setOpenSongSubmenu(null); setSongMenuPosition(null);
+    setCollectionName(""); setAttachSelection(false); setCollectionSeedSong(song); setCollectionDialog("playlist");
+  }
+
+  function prepareDeleteSong(song: Song) {
+    setOpenMenu(null); setOpenSongSubmenu(null); setSongMenuPosition(null);
+    setDeleteError(""); setDeleteTargets([song]);
+  }
+
+  function prepareGenerateCover(song: Song) {
+    setOpenMenu(null); setOpenSongSubmenu(null); setSongMenuPosition(null);
+    setCoverDirection(""); setCoverTarget(song);
+  }
+
   async function removeFromActivePlaylist(song: Song) {
     if (!activePlaylist) return;
     setLibraryBusy(true); setError("");
@@ -1925,12 +1932,22 @@ export default function App() {
     finally { setLanBusy(false); }
   }
 
+  function toggleGalaxy() {
+    setGalaxyEnabled((enabled) => {
+      const next = !enabled;
+      localStorage.setItem("yue2-orbitwave-enabled", next ? "on" : "off");
+      return next;
+    });
+  }
+
   return <div className="app">
+    {galaxyEnabled && studioView === "live" && <OrbitGalaxy songs={songs} playing={livePlaying ? liveCurrentId : null} analyser={liveAnalyser} />}
     <header className="topbar">
       <div className="brand"><img className="brand-logo" src={logoUrl} alt="" /><span>YuE2 Studio</span></div>
-      <nav className="top-modes" aria-label="Studio modes"><button className={studioView === "create" && !editorSong ? "active" : ""} onClick={() => setStudioView("create")}>Create</button><button className={studioView === "library" && !editorSong ? "active" : ""} onClick={() => setStudioView("library")}>Library</button><button className={studioView === "radio" && !editorSong ? "active" : ""} onClick={() => { setPlaying(null); setStudioView("radio"); }}>Radio</button><button className={studioView === "effects" && !editorSong ? "active" : ""} onClick={() => setStudioView("effects")}>Effects</button><button className={studioView === "models" && !editorSong ? "active" : ""} onClick={() => setStudioView("models")}>Models</button><button className={editorSong ? "active" : ""} onClick={() => void openStudioFromNav()}>Studio</button></nav>
+      <nav className="top-modes" aria-label="Studio modes"><button className={studioView === "create" && !editorSong ? "active" : ""} onClick={() => void changeStudioView("create")}>Create</button><button className={studioView === "library" && !editorSong ? "active" : ""} onClick={() => void changeStudioView("library")}>Library</button><button className={studioView === "radio" && !editorSong ? "active" : ""} onClick={() => { setPlaying(null); void changeStudioView("radio"); }}>Radio</button><button className={studioView === "live" && !editorSong ? "active" : ""} onClick={() => { setPlaying(null); void changeStudioView("live"); }}>Live</button><button className={studioView === "effects" && !editorSong ? "active" : ""} onClick={() => void changeStudioView("effects")}>Effects</button><button className={studioView === "models" && !editorSong ? "active" : ""} onClick={() => void changeStudioView("models")}>Models</button><button className={editorSong ? "active" : ""} onClick={() => void openStudioFromNav()}>Studio</button></nav>
       <span className={`pill ${ready ? "ok" : "warn"}`}><i />{ready ? "YuE2 ready" : "engine unavailable"}</span>
       {gpu?.detected && <span className="pill ok desktop-status"><i />{gpu.name?.replace("NVIDIA GeForce ", "")}</span>}
+      {studioView === "live" && <button type="button" className={`galaxy-toggle ${galaxyEnabled ? "active" : ""}`} aria-pressed={galaxyEnabled} onClick={toggleGalaxy}>✦ Orbitwave {galaxyEnabled ? "On" : "Off"}</button>}
       <span className="spacer" />
       <span className="top-context">Standalone local music studio</span>
     </header>
@@ -1942,6 +1959,12 @@ export default function App() {
         <button className={keysOpen ? "active" : ""} onClick={() => { setKeysOpen((open) => !open); setLogsOpen(false); setSystemOpen(false); }}><span>{[..."KEYS"].map((letter, index) => <b key={`${letter}-${index}`}>{letter}</b>)}</span></button>
         <i />
         <button className={systemOpen ? "active" : ""} onClick={() => { setSystemOpen((open) => !open); setLogsOpen(false); setKeysOpen(false); }}><span>{[..."SYSTEM"].map((letter, index) => <b key={`${letter}-${index}`}>{letter}</b>)}</span></button>
+        <i />
+        <button className={`mcp-rail-button ${mcpConnected ? "connected" : ""} ${rightDrawer === "mcp" ? "active" : ""}`} title={mcpConnected ? "MCP connected" : "MCP not connected"} onClick={() => { setRightDrawer(rightDrawer === "mcp" ? null : "mcp"); setLogsOpen(false); setKeysOpen(false); setSystemOpen(false); }}><span>{[..."MCP"].map((letter, index) => <b key={`${letter}-${index}`}>{letter}</b>)}</span></button>
+        <i />
+        <button className={rightDrawer === "job" ? "active" : ""} onClick={() => { setRightDrawer(rightDrawer === "job" ? null : "job"); setLogsOpen(false); setKeysOpen(false); setSystemOpen(false); }}><span>{[..."JOB"].map((letter, index) => <b key={`${letter}-${index}`}>{letter}</b>)}</span></button>
+        <i />
+        <button className={rightDrawer === "details" ? "active" : ""} onClick={() => { setRightDrawer(rightDrawer === "details" ? null : "details"); setLogsOpen(false); setKeysOpen(false); setSystemOpen(false); }}><span>{[..."DETAILS"].map((letter, index) => <b key={`${letter}-${index}`}>{letter}</b>)}</span></button>
       </nav>
 
       <section className={`composer main-view ${studioView === "create" ? "active" : ""}`}>
@@ -1960,7 +1983,7 @@ export default function App() {
                   <input value={songIdea} onChange={(event) => setSongIdea(event.target.value)}
                     placeholder="A cyberpunk song about juggling zebras"
                     onKeyDown={(event) => { if (event.key === "Enter" && !composeBusy) { event.preventDefault(); void composeFromIdea(); } }} />
-                  <button type="button" className="primary" disabled={composeBusy} onClick={() => void composeFromIdea()}>{composeBusy ? "Writing…" : "✦ Write the song"}</button>
+                  <button type="button" className="primary" disabled={writingBusy || composeBusy} onClick={() => void composeFromIdea()}>{composeBusy ? "Writing…" : "✦ Write the song"}</button>
                 </div>
                 <small>Fills in the title, the full structured description, and tagged lyrics. Edit anything afterwards.</small>
               </label>
@@ -1998,13 +2021,15 @@ export default function App() {
           </div>
         </div>
         <div className="create-footer">
-          <button className="primary" disabled={!ready || Boolean(generationJob && ["queued", "running"].includes(generationJob.status))} onClick={createSong}>Create song</button>
+          <button className="primary" disabled={!ready || writingBusy || generationSubmitRef.current || Boolean(generationJob && ["queued", "running"].includes(generationJob.status))} onClick={createSong}>Create song</button>
           <button type="button" className="clear-fields-button" onClick={requestClearForm}>Clear fields</button>
+          {writingBusy && <button type="button" className="danger" onClick={() => void cancelWriting()}>Stop writing</button>}
           {generationJob && ["queued", "running"].includes(generationJob.status) && <button className="danger" onClick={() => void cancelJob(generationJob.id)}>Cancel</button>}
         </div>
         </>}
 
         {createMode === "easy" && <div className="easy-mode">
+          <div className="easy-writer" title={writingEnabled ? writingSource : "Turn on a Writing helper in Keys"}>{writingEnabled ? writingSource : "No writing helper"}</div>
           <div className="easy-thread">
             {chatMessages.length === 0 && <div className="easy-intro">
               <h2>Create with YuE2</h2>
@@ -2057,7 +2082,7 @@ export default function App() {
                 </div>
               : chatLyrics
               ? <div className="easy-lyrics">
-                  <div className="easy-style-head"><span className="easy-style-label">Lyrics</span><span className="easy-lyrics-count">{chatLyrics.split("\n").filter((line) => line.trim() && !/^\[.+\]$/.test(line.trim())).length} lines</span><button type="button" className="lyric-ai-button" disabled={translateBusy || !chatLyrics.replace(/\[[^\]]+\]/g, "").trim()} onClick={() => void translateLyricsToEnglish("easy")}>{translateBusy ? "Translating…" : "Translate to English"}</button></div>
+                  <div className="easy-style-head"><span className="easy-style-label">Lyrics</span><span className="easy-lyrics-count">{chatLyrics.split("\n").filter((line) => line.trim() && !/^\[.+\]$/.test(line.trim())).length} lines</span><button type="button" className="lyric-ai-button" disabled={writingBusy || translateBusy || !chatLyrics.replace(/\[[^\]]+\]/g, "").trim()} onClick={() => void translateLyricsToEnglish("easy")}>{translateBusy ? "Translating…" : "Translate to English"}</button></div>
                   <div className="easy-lyrics-body">{chatLyrics.split("\n").map((line, index) => {
                     const text = line.trim();
                     if (!text) return <br key={index} />;
@@ -2081,7 +2106,7 @@ export default function App() {
               <i />
               <span>{chatPhase === "thinking" ? "Reading your idea…" : chatPhase === "writing" ? "Writing the music description…" : chatPhase === "lyrics" ? "Writing the lyrics to fit it…" : "Handing it to YuE2…"}</span>
               <b>{chatElapsed}s</b>
-              <em>{chatPhase === "writing" || chatPhase === "lyrics" ? "cloud model — the GPU is still idle" : ""}</em>
+              <em>{chatPhase === "starting" ? "YuE2 on this GPU" : writingSource}{chatPhase !== "starting" && writingIdleNote ? ` — ${writingIdleNote}` : ""}</em>
             </div>}
 
             {generationJob && createMode === "easy" && chatMessages.length > 0 && <div className={`job-banner ${generationJob.status}`}>
@@ -2108,7 +2133,7 @@ export default function App() {
                   Start over
                 </button>}
                 {chatMessages.length > 0 && <button type="button" className="easy-new" disabled={!chatStyle || chatBusy || generationInFlight()} onClick={rerunEasySong}>Make another</button>}
-                <button type="button" key={sendNudge} className={`easy-send${sendNudge ? " nudge" : ""}`} disabled={chatBusy || generationInFlight() || !chatInput.trim()} aria-label="Send" onClick={() => void sendChat()}>{chatBusy ? "…" : "\u2191"}</button>
+                <button type="button" key={sendNudge} className={`easy-send${sendNudge ? " nudge" : ""}`} disabled={writingBusy || chatBusy || generationInFlight() || !chatInput.trim()} aria-label="Send" onClick={() => void sendChat()}>{chatBusy ? "…" : "\u2191"}</button>
               </div>
             </div>
           </div>
@@ -2209,15 +2234,11 @@ export default function App() {
         </div>}
       </section>
 
-      {studioView === "radio" && <RadioPage songs={songs} playlists={playlists} workspaces={workspaces} coverSources={coverSources} onLeaveLibraryPlay={() => setPlaying(null)} />}
+      {studioView === "radio" && <RadioPage songs={songs} releasingSongIds={releasingSongIds} playlists={playlists} workspaces={workspaces} coverSources={coverSources} coverArtReady={Boolean(status?.cover_art.ready)} lyricsSyncReady={Boolean(status?.lyrics_sync.ready)} lyricsSyncBusy={Boolean((utilityJob?.kind === "lyrics_sync" && ["queued", "running"].includes(utilityJob.status)) || status?.jobs.some((job) => job.kind === "lyrics_sync" && ["queued", "running"].includes(job.status)))} onSyncLyrics={startLyricsSync} onRateSong={async (song, rating) => { const saved = await rateSong(songFolderName(song), rating); setSongs((items) => items.map((item) => item.id === song.id ? { ...item, rating: saved.rating } : item)); }} onLeaveLibraryPlay={() => setPlaying(null)} onAddToPlaylist={addToPlaylist} onNewPlaylistForSong={newPlaylistForSong} onEditSong={editSong} onGenerateCover={prepareGenerateCover} onDeleteSong={prepareDeleteSong} />}
+      {studioView === "live" && <LivePage ready={ready} presets={STYLE_PRESETS} art={TEMPLATE_ART} songs={songs} coverSources={coverSources} onLeaveLibraryPlay={() => setPlaying(null)} onRefresh={refresh} onAnalyserChange={setLiveAnalyser} onPlaybackChange={setLivePlaying} onCurrentChange={setLiveCurrentId} />}
       {studioView === "effects" && <EffectsPage ready={Boolean(status?.sound_effects.ready)} detail={status?.sound_effects.detail ?? "Install the local sound-effects model and runtime to enable generation."} songs={songs} onOpenStudio={(folder) => void openStudioFromEffects(folder)} onOpenModels={() => setStudioView("models")} />}
       {studioView === "models" && <ModelsPage onChanged={() => void refresh()} />}
 
-      <nav className="edge-tabs right-edge" aria-label="Song panels">
-        <button className={rightDrawer === "job" ? "active" : ""} onClick={() => setRightDrawer(rightDrawer === "job" ? null : "job")}><span>{[..."JOB"].map((letter, index) => <b key={`${letter}-${index}`}>{letter}</b>)}</span></button>
-        <i />
-        <button className={rightDrawer === "details" ? "active" : ""} onClick={() => setRightDrawer(rightDrawer === "details" ? null : "details")}><span>{[..."DETAILS"].map((letter, index) => <b key={`${letter}-${index}`}>{letter}</b>)}</span></button>
-      </nav>
     </main>
 
     {systemOpen && <aside className="system-drawer left-drawer" style={{ width: leftDrawerWidth }}><div className="drawer-resizer right" role="separator" aria-label="Resize System panel" onPointerDown={(event) => beginDrawerResize("left", event)} />
@@ -2258,6 +2279,7 @@ export default function App() {
     <KeysDrawer open={keysOpen} onClose={() => setKeysOpen(false)} width={leftDrawerWidth} onResizeStart={(event) => beginDrawerResize("left", event)} />
     {rightDrawer === "job" && <aside className="right-drawer job-drawer" style={{ width: rightDrawerWidth }}><div className="drawer-resizer left" role="separator" aria-label="Resize Job panel" onPointerDown={(event) => beginDrawerResize("right", event)} /><div className="drawer-head"><div><div className="eyebrow">CURRENT JOB</div><h2>{displayJob?.kind === "yue2" ? "Song generation" : displayJob?.kind === "cover_art" ? "Cover art" : displayJob?.kind === "stems" ? "Stem extraction" : displayJob?.kind === "lyrics_sync" ? "Lyric synchronization" : displayJob?.kind === "sheetsage" ? "Cover transcription" : "Generation"}</h2></div><button onClick={() => setRightDrawer(null)}>✕</button></div>{displayJob ? <><div className={`job-banner ${displayJob.status}`}><div><strong>{displayJob.phase}</strong><span>{displayJob.error || timingLabel(displayJob)}</span></div><div className="progress"><i style={{ width: `${Math.round(displayJob.progress * 100)}%` }} /></div>{displayJob.stage_progress != null && displayJob.phase.includes("thumbnail") && <div className="stage-progress"><span>Thumbnail</span><b>{Math.round(displayJob.stage_progress * 100)}%</b><div className="progress"><i style={{ width: `${Math.round(displayJob.stage_progress * 100)}%` }} /></div></div>}</div><section className="card kv"><span>status</span><b>{displayJob.status}</b><span>progress</span><b>{Math.round(displayJob.progress * 100)}%</b><span>elapsed</span><b>{elapsedLabel(displayJob)}</b><span>remaining</span><b>{remainingLabel(displayJob) || "—"}</b><span>active jobs</span><b>{activeJobs}</b></section>{["queued", "running"].includes(displayJob.status) && <button className="danger memory" onClick={() => void cancelJob(displayJob.id)}>Cancel {displayJob.kind === "yue2" ? "generation" : "task"}</button>}</> : <div className="drawer-empty"><span>♫</span><strong>No active generation</strong><p>Your next YuE2 job will appear here with live progress and cancellation.</p></div>}</aside>}
     {rightDrawer === "details" && <aside className="right-drawer details-drawer" style={{ width: rightDrawerWidth }}><div className="drawer-resizer left" role="separator" aria-label="Resize Details panel" onPointerDown={(event) => beginDrawerResize("right", event)} /><div className="drawer-head"><div><div className="eyebrow">SONG DETAILS</div><h2>{selectedSong?.title ?? "No song selected"}</h2></div><button onClick={() => setRightDrawer(null)}>✕</button></div>{selectedSong ? <><p className="details-summary">{selectedSong.description}</p><section className="card kv"><span>artist</span><b>{selectedSong.artist || "Not set"}</b><span>album</span><b>{selectedSong.album || "Not set"}</b><span>genre</span><b>{selectedSong.genre || "Not set"}</b><span>year / track</span><b>{[selectedSong.year, selectedSong.track_number].filter(Boolean).join(" / ") || "Not set"}</b><span>type</span><b>{selectedSong.instrumental ? "Instrumental" : "Vocal"}</b><span>seed</span><b>{selectedSong.seed}</b><span>lyrics</span><b>{selectedSong.timed_lyrics?.lines?.length ? `${selectedSong.timed_lyrics.lines.length} timed lines` : "not synchronized"}</b><span>created</span><b>{selectedSong.created_at}</b></section>{selectedSong.lyrics && <section className="details-lyrics"><div className="eyebrow">LYRICS</div><pre>{selectedSong.lyrics}</pre></section>}{selectedSong.english_translation && <section className="details-lyrics"><div className="eyebrow">ENGLISH TRANSLATION</div><pre>{selectedSong.english_translation}</pre></section>}<div className="detail-actions"><button onClick={() => editSong(selectedSong)}>Edit details</button><button disabled={!status?.lyrics_sync.ready || selectedSong.instrumental} onClick={() => void startLyricsSync(selectedSong)}>{selectedSong.timed_lyrics?.lines?.length ? "Re-sync lyrics" : "Sync lyrics"}</button><button onClick={() => void openAudioEditor(selectedSong)}>Studio</button><button onClick={() => void openVideoStudio(selectedSong)}>Make video</button><button onClick={() => reuseSong(selectedSong)}>Reuse song</button><button onClick={() => downloadSong(selectedSong)}>Download WAV</button><button onClick={() => void openSongFolder(songFolderName(selectedSong))}>Open folder</button></div></> : <div className="drawer-empty"><span>♫</span><strong>Select a song</strong><p>Choose a library song to see its saved prompt, seed, lyrics, and actions.</p></div>}</aside>}
+    {rightDrawer === "mcp" && <aside className="right-drawer mcp-drawer" style={{ width: rightDrawerWidth }}><div className="drawer-resizer left" role="separator" aria-label="Resize MCP panel" onPointerDown={(event) => beginDrawerResize("right", event)} /><div className="drawer-head"><div><div className="eyebrow">MCP CONNECTIONS</div><h2>Agent activity</h2></div><button onClick={() => setRightDrawer(null)}>✕</button></div><section className={`mcp-connection ${mcpConnected ? "connected" : ""}`}><i /><div><strong>{mcpConnected ? "Codex connected" : "No MCP client connected"}</strong><span>{mcpConnected ? "Agents can use YuE2 directly; actions appear below." : "Open Codex with the YuE2 connection enabled to link an agent."}</span></div></section><div className="eyebrow">RECENT ACTIVITY</div><section className="mcp-drawer-list">{mcpActivity.length ? mcpActivity.map((item) => <article className={item.status} key={item.id}><i /><div><strong>{item.tool}</strong><span>{item.summary}</span></div><time>{new Date(item.at * 1000).toLocaleTimeString()}</time></article>) : <div className="drawer-empty"><span>⌁</span><strong>Waiting for an MCP connection</strong><p>This panel will show connected agents and every action they take in YuE2.</p></div>}</section></aside>}
     {videoTool && <section className="tool-workspace video-tool-workspace" aria-label={`Video Studio for ${videoTool.song.title}`}><header className="tool-head"><div><div className="eyebrow">STUDIO TOOL</div><h2>Video Studio</h2><span>{videoTool.song.title} · local visualizer and MP4 renderer</span></div><button onClick={() => setVideoTool(null)}>Close</button></header><iframe ref={videoStudioFrame} title={`Video Studio — ${videoTool.song.title}`} src={videoTool.url} allow="autoplay" /></section>}
     {activeEditorSong && <SongStudio key={activeEditorSong.id} song={activeEditorSong} mixUrl={editorSource} stemJob={studioStemJob} stemsReady={Boolean(status?.stems.ready)} soundEffectsReady={Boolean(status?.sound_effects.ready)} soundEffectsDetail={status?.sound_effects.detail ?? "Sound-effects setup is not installed."} onStartStems={() => void startStudioStems()} onMixExported={() => { void refresh(); }} onClose={() => { studioStemKick.current = ""; setEditorSong(null); void refresh(); }} />}
     {templatesOpen && <div className="modal-backdrop" role="presentation" onPointerDown={(event) => { if (event.target === event.currentTarget) setTemplatesOpen(false); }}>
@@ -2273,9 +2295,10 @@ export default function App() {
         <section className="prompt-import">
           <label>Paste an existing prompt<textarea rows={4} value={promptImport} onChange={(event) => setPromptImport(event.target.value)} placeholder="Paste a Suno-style prompt, comma-separated style list, or your own plain-language description…" /></label>
           <div><span>We will sort its tempo, voices, instruments, production, mood, and exclusions into the fields below. You can edit everything before applying it.</span><button type="button" className="rewrite-button" disabled={!promptImport.trim()} onClick={analyzeImportedPrompt}>↻ Analyze and rebuild</button></div>
-          <div className="caption-ai-row">
+            <div className="caption-ai-row">
             <span>Or let the writing model draft the whole structured caption using the closest bundled reference captions.</span>
-            <button type="button" className="caption-ai-button" disabled={captionBusy} onClick={() => void writeCaptionWithAi()}>{captionBusy ? "Writing…" : "✦ Write it with AI"}</button>
+            <button type="button" className="caption-ai-button" disabled={writingBusy || captionBusy} onClick={() => void writeCaptionWithAi()}>{captionBusy ? "Writing…" : "✦ Write it with AI"}</button>
+            {captionBusy && <button type="button" onClick={() => void cancelWriting()}>Stop writing</button>}
           </div>
           {captionError && <p className="caption-ai-error">{captionError}</p>}
         </section>
@@ -2306,9 +2329,9 @@ export default function App() {
         {lyricPreview && <label>Lyrics preview<textarea rows={14} value={lyricPreview} onChange={(event) => setLyricPreview(event.target.value)} /><small>{lyricPreviewTitle ? `Suggested title if yours is empty: ${lyricPreviewTitle}` : "Section tags only. Apply writes this into the lyrics box."}</small></label>}
         {lyricPreviewDescription && <label>Music description found<textarea rows={8} value={lyricPreviewDescription} onChange={(event) => setLyricPreviewDescription(event.target.value)} /><small>Apply will move this into Music Description, not the lyrics.</small></label>}
         {lyricError && <div className="error">{lyricError}</div>}
-        <p className="modal-note">{writingEnabled ? "This uses your enabled Writing key." : writingConfigured ? "The first generate turns Writing Enable on so this key can be used. Uncheck Enable in KEYS later to stop spending." : "Save a Writing key in KEYS first."}</p>
+        <p className="modal-note">{writingEnabled ? `This uses ${writingSource}.` : writingConfigured ? `The first generate turns Enable on for ${writingSource.replace("Writing helper is off", writing?.provider || "your writer")}. Uncheck Enable in KEYS later to stop.` : "Save a Writing helper in KEYS first."}</p>
         <div className="modal-actions">
-          <button disabled={lyricBusy} onClick={() => setLyricAssist(null)}>Cancel</button>
+          <button onClick={() => { if (lyricBusy) void cancelWriting(); setLyricAssist(null); }}>{lyricBusy ? "Stop writing" : "Cancel"}</button>
           {!lyricPreview && lyricAssist.mode === "generate" && <button disabled={lyricBusy} onClick={() => void runLyricAssist(true)}>{lyricBusy ? "Writing…" : "Generate random lyrics"}</button>}
           {!lyricPreview && <button className="primary" disabled={lyricBusy} onClick={() => void runLyricAssist(false)}>{lyricBusy ? "Writing…" : lyricAssist.mode === "optimize" ? "Optimize" : "Generate lyrics"}</button>}
           {lyricPreview && <button disabled={lyricBusy} onClick={() => void runLyricAssist(lyricAssist.mode === "generate" && !lyricIdea.trim())}>Try again</button>}

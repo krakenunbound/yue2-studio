@@ -4,8 +4,10 @@ import argparse
 import gc
 import json
 import math
+import os
 import re
 import sys
+import threading
 import time
 from dataclasses import dataclass
 from difflib import SequenceMatcher
@@ -86,6 +88,25 @@ def emit(event: str, **payload: Any) -> None:
         sys.stdout.buffer.flush()
 
 
+def report_while_running(phase: str, message: str, operation: Any, *, interval_seconds: float = 5.0) -> Any:
+    """Run a blocking WhisperX operation while reporting its real elapsed time."""
+    started = time.monotonic()
+    finished = threading.Event()
+
+    def heartbeat() -> None:
+        while not finished.wait(interval_seconds):
+            elapsed = max(1, int(time.monotonic() - started))
+            emit("progress", phase=phase, message=f"{message} ({elapsed}s elapsed).")
+
+    reporter = threading.Thread(target=heartbeat, name="lyrics-align-heartbeat", daemon=True)
+    reporter.start()
+    try:
+        return operation()
+    finally:
+        finished.set()
+        reporter.join(timeout=0.1)
+
+
 def write_text(path: Path, content: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8")
@@ -158,20 +179,8 @@ def split_display_units(text: str, language: str) -> List[str]:
 
 def extract_lyric_lines(text: str, language: str) -> List[Dict[str, Any]]:
     lines: List[Dict[str, Any]] = []
-    for raw_line in str(text or "").splitlines():
-        line = raw_line.strip()
-        if not line:
-            continue
-        if line.startswith("[") and line.endswith("]"):
-            continue
-        if line.startswith("(") and line.endswith(")"):
-            continue
-        # Strip leading section markers like "[Verse 1]" or "(Chorus)" from the
-        # beginning of lyric lines so they do not pollute the alignment tokens.
-        line = re.sub(r"^\[.*?\]\s*", "", line).strip()
-        line = re.sub(r"^\(.*?\)\s*", "", line).strip()
-        if not line:
-            continue
+    from lyric_format import sung_lines
+    for line in sung_lines(text):
         tokens = tokenize_for_match(line, language)
         if not tokens:
             continue
@@ -619,7 +628,7 @@ def align_lyric_lines(
     if not lyric_lines:
         return []
     if not aligned_tokens:
-        return distribute_line_timings(lyric_lines, duration_seconds, language)
+        return []
 
     lyric_token_stream: List[str] = []
     line_ranges: List[Tuple[int, int]] = []
@@ -666,10 +675,12 @@ def align_lyric_lines(
             }
         )
 
-    fill_unmatched_line_timings(line_records, lyric_lines, duration_seconds, language)
+    # Unrecognized lyrics have no timing evidence; never place them in instrumental gaps.
 
     timed_lines: List[Dict[str, Any]] = []
     for line_index, record in enumerate(line_records):
+        if not record.get("matched_tokens"):
+            continue
         start_time = max(0.0, float(record["start"]))
         if timed_lines:
             start_time = max(start_time, float(timed_lines[-1]["end"]))
@@ -865,6 +876,9 @@ def transcribe_with_faster_whisper(
     device: str,
     model_name: str,
     lyrics_prompt: str,
+    *,
+    vad_filter: bool = True,
+    condition_on_previous_text: bool = True,
 ) -> Dict[str, Any]:
     from faster_whisper import WhisperModel
 
@@ -876,9 +890,9 @@ def transcribe_with_faster_whisper(
         language=language,
         beam_size=5,
         best_of=5,
-        condition_on_previous_text=True,
+        condition_on_previous_text=condition_on_previous_text,
         word_timestamps=True,
-        vad_filter=True,
+        vad_filter=vad_filter,
         temperature=0.0,
         initial_prompt=lyrics_prompt or None,
     )
@@ -902,6 +916,14 @@ def transcribe_with_faster_whisper(
             }
         )
     aligned = {"segments": segments}
+    del model
+    gc.collect()
+    try:
+        import torch
+        if device == "cuda":
+            torch.cuda.empty_cache()
+    except Exception:
+        pass
     return {
         "aligned": aligned,
         "language": choose_language(str(getattr(info, "language", None) or language)),
@@ -936,16 +958,24 @@ def transcribe_with_whisperx(audio_path: Path, language: str, device: str, model
 
     align_language = choose_language(str(transcription.get("language") or language))
     emit("progress", phase="align", message=f"Loading WhisperX align model for {align_language}.")
-    align_model, align_metadata = whisperx.load_align_model(language_code=align_language, device=device)
+    align_model, align_metadata = report_while_running(
+        "align",
+        f"Loading WhisperX align model for {align_language}",
+        lambda: whisperx.load_align_model(language_code=align_language, device=device),
+    )
     emit("progress", phase="align", message="Aligning recognized vocals to timestamps.")
-    aligned = whisperx.align(
-        transcription["segments"],
-        align_model,
-        align_metadata,
-        audio,
-        device,
-        return_char_alignments=False,
-        print_progress=False,
+    aligned = report_while_running(
+        "align",
+        "Aligning recognized vocals to timestamps",
+        lambda: whisperx.align(
+            transcription["segments"],
+            align_model,
+            align_metadata,
+            audio,
+            device,
+            return_char_alignments=False,
+            print_progress=False,
+        ),
     )
 
     del align_model
@@ -956,17 +986,35 @@ def transcribe_with_whisperx(audio_path: Path, language: str, device: str, model
     return {"aligned": aligned, "language": align_language, "device": device}
 
 
+def estimate_vocal_start(
+    lyric_lines: List[Dict[str, Any]],
+    aligned_tokens: List[TimedToken],
+    duration_seconds: float,
+    language: str,
+) -> float:
+    """Use recognized words only to find where singing starts, not to time karaoke."""
+    timed = align_lyric_lines(lyric_lines, aligned_tokens, duration_seconds, language)
+    if not timed:
+        return 0.0
+    start = max(0.0, float(timed[0]["start"]) - 0.4)
+    if start < 1.0 or start >= max(1.0, duration_seconds - 0.5):
+        return 0.0
+    return start
+
+
 def force_align_known_lyrics(
     audio_path: Path,
     lyric_lines: List[Dict[str, Any]],
     language: str,
     device: str,
+    start_seconds: float = 0.0,
 ) -> Dict[str, Any]:
-    """Force-align the saved lyrics directly instead of trusting ASR wording.
+    """Force-align the saved lyrics with WhisperX CTC, matching MiniMax Studio.
 
     Generated singing often causes speech recognition to omit or invent words.
-    WhisperX's CTC alignment model accepts known text, which gives the karaoke
-    renderer the exact words the user wrote along with their audio timestamps.
+    WhisperX's CTC alignment model accepts known text, which gives karaoke the
+    exact words the user wrote. start_seconds skips a recognized instrumental
+    intro so those words are not stretched over the opening.
     """
     import whisperx
 
@@ -976,30 +1024,49 @@ def force_align_known_lyrics(
         raise RuntimeError("No saved lyric text is available for forced alignment.")
 
     emit("progress", phase="align", message=f"Force-aligning the saved lyrics on {device}.")
-    align_model, align_metadata = whisperx.load_align_model(language_code=language, device=device)
+    align_model, align_metadata = report_while_running(
+        "align",
+        "Loading WhisperX alignment model",
+        lambda: whisperx.load_align_model(language_code=language, device=device),
+    )
     audio = whisperx.load_audio(str(audio_path))
-    # whisperx.load_audio returns 16 kHz mono samples.
     duration_seconds = len(audio) / 16000.0
-    forced = whisperx.align(
-        [{"start": 0.0, "end": duration_seconds, "text": known_text}],
-        align_model,
-        align_metadata,
-        audio,
-        device=device,
-        return_char_alignments=False,
-        print_progress=False,
+    window_start = max(0.0, min(float(start_seconds or 0.0), max(0.0, duration_seconds - 0.5)))
+    emit("progress", phase="align", message="Aligning saved lyrics with WhisperX.")
+    forced = report_while_running(
+        "align",
+        "Aligning saved lyrics with WhisperX",
+        lambda: whisperx.align(
+            [{"start": window_start, "end": duration_seconds, "text": known_text}],
+            align_model,
+            align_metadata,
+            audio,
+            device=device,
+            return_char_alignments=False,
+            print_progress=False,
+        ),
     )
     words = list(forced.get("word_segments") or [])
     if len(words) < max(3, math.ceil(len(expected_tokens) * 0.9)):
         raise RuntimeError("Forced alignment returned too few timed lyric words.")
 
+    del align_model
+    gc.collect()
+    try:
+        import torch
+        if device == "cuda":
+            torch.cuda.empty_cache()
+    except Exception:
+        pass
+
     return {
-        "aligned": {"segments": [{"start": 0.0, "end": duration_seconds, "text": known_text, "words": words}]},
+        "aligned": {"segments": [{"start": window_start, "end": duration_seconds, "text": known_text, "words": words}]},
         "language": language,
         "device": device,
         "duration_seconds": duration_seconds,
         "aligned_audio_path": str(audio_path),
         "alignment_method": "whisperx-forced-known-lyrics",
+        "vocal_start_seconds": window_start,
     }
 
 
@@ -1059,6 +1126,25 @@ def transcribe_with_fallback(
     raise last_error
 
 
+def recognize_lyric_timing(
+    audio_path: Path, lyrics_text: str, language: str, device: str, model_name: str,
+) -> Dict[str, Any]:
+    # Speech VAD can discard an entire sung performance. Recognize the full
+    # recording and retain its absolute word times, including instrumental gaps.
+    # Forcing supplied text across the full mix can return every word while
+    # placing it on unrelated sounds, so it is not a safe timing fallback.
+    result = report_while_running(
+        "transcribe", "Recognizing sung words and their playback positions",
+        lambda: transcribe_with_faster_whisper(
+            audio_path, language, device, model_name,
+            build_transcription_prompt(lyrics_text, language),
+            vad_filter=False, condition_on_previous_text=False,
+        ),
+    )
+    result["alignment_method"] = "whisper-recognized-word-timestamps"
+    return result
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Align song lyrics to audio and emit karaoke subtitle files.")
     parser.add_argument("--audio", required=True)
@@ -1100,23 +1186,22 @@ def main() -> None:
         vocals_path = None
 
     chosen_device = choose_device(args.device)
-    try:
-        alignment_result = force_align_known_lyrics(
-            aligned_audio_path,
-            lyric_lines,
-            language,
-            chosen_device,
-        )
-    except Exception as exc:
-        emit("progress", phase="align", message=f"Known-lyrics alignment was unavailable, using transcription fallback: {exc}")
-        alignment_result = transcribe_with_fallback(
-            aligned_audio_path,
-            language,
-            args.device,
-            args.model_name,
-            lyrics_text,
-            fallback_audio_path=audio_path,
-        )
+    alignment_result: Dict[str, Any] | None = None
+    last_error: Exception | None = None
+    devices = [chosen_device]
+    if chosen_device == "cuda":
+        devices.append("cpu")
+    for device in devices:
+        try:
+            alignment_result = recognize_lyric_timing(
+                aligned_audio_path, lyrics_text, language, device, args.model_name,
+            )
+            break
+        except Exception as exc:
+            last_error = exc
+            emit("progress", phase="transcribe", message=f"Vocal recognition failed on {device}: {exc}")
+    if alignment_result is None:
+        raise last_error or RuntimeError("Vocal recognition failed.")
     aligned = alignment_result["aligned"]
     aligned_language = choose_language(alignment_result.get("language") or language)
     used_device = str(alignment_result.get("device") or choose_device(args.device))
@@ -1135,7 +1220,7 @@ def main() -> None:
     aligned_tokens = flatten_aligned_words(aligned, aligned_language)
     timed_lines = align_lyric_lines(lyric_lines, aligned_tokens, duration_seconds, aligned_language)
     if not timed_lines:
-        raise SystemExit("Lyric timing failed: no timed lines were produced.")
+        raise SystemExit("No saved lyrics could be matched to recognized vocals. The audio may have missing or unclear vocals; no timings were invented.")
 
     emit("progress", phase="write", message="Writing JSON, LRC, and ASS karaoke files.")
     timed_json_path = output_dir / "timed_lyrics.json"
@@ -1151,6 +1236,7 @@ def main() -> None:
         "vocals_path": str(vocals_path) if vocals_path else "",
         "duration_seconds": duration_seconds,
         "line_count": len(timed_lines),
+        "unmatched_line_count": len(lyric_lines) - len(timed_lines),
         "word_count": sum(len(line.get("words") or []) for line in timed_lines),
         "model_name": args.model_name,
         "device": used_device,
@@ -1178,6 +1264,10 @@ def main() -> None:
         used_vocals_stem=result_payload["used_vocals_stem"],
         alignment_method=result_payload["alignment_method"],
     )
+    # CUDA interpreter shutdown can hang on Windows after WhisperX. The host
+    # already has the karaoke files; skip atexit destructors.
+    sys.stdout.flush()
+    os._exit(0)
 
 
 if __name__ == "__main__":

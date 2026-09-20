@@ -85,10 +85,10 @@ export type StudioEffectRegion = StudioRange & {
   fade_out?: number;
 };
 export type StudioClip = { id: string; start: number; source_in: number; source_out: number | null; fade_in: number; fade_out: number; gain?: number; gain_left?: number; gain_right?: number };
-export type StudioTrackState = { name: string; gain: number; muted: boolean; solo: boolean; offset?: number; trim_start?: number; trim_end?: number | null; fade_in?: number; fade_out?: number; cuts?: StudioRange[]; effects?: StudioEffectRegion[]; clips?: StudioClip[]; use_clips?: boolean };
+export type StudioTrackState = { name: string; lane?: string | null; gain: number; muted: boolean; solo: boolean; offset?: number; trim_start?: number; trim_end?: number | null; fade_in?: number; fade_out?: number; cuts?: StudioRange[]; effects?: StudioEffectRegion[]; clips?: StudioClip[]; use_clips?: boolean };
 export type StudioSession = { tracks: StudioTrackState[]; updated_at?: string };
 export type StudioImport = { file: string; name: string; original?: string; duration?: number; effect_id?: string; combined_sources?: StudioImport[] };
-export type SoundEffect = { id: string; name: string; prompt: string; negative_prompt?: string; duration: number; seed: number | null; created_at: string; url: string };
+export type SoundEffect = { source?: string; sample_rate?: number; channels?: number; original_filename?: string; id: string; name: string; prompt: string; negative_prompt?: string; duration: number; seed: number | null; created_at: string; url: string };
 export type Playlist = { id: string; name: string; song_ids: string[]; created_at: string };
 export type Workspace = { id: string; name: string; song_ids: string[]; created_at: string };
 export type VoiceSlots = { female?: string; male?: string; backing?: string };
@@ -100,9 +100,9 @@ export type VoiceProfile = {
   built_in: boolean; archived: boolean; created_at?: string; updated_at?: string; slot?: string;
 };
 export type VoiceCompileResult = { applied: boolean; description: string; preview: string; slots: VoiceSlots; snapshots: VoiceProfile[]; assignments?: string[] };
-export type Song = { id: string; title: string; artist?: string; album?: string; genre?: string; year?: string; track_number?: string; description: string; lyrics: string; english_translation?: string; lyrics_language?: string; timed_lyrics?: TimedLyrics | null; instrumental: boolean; seed: number | null; duration?: number; steps?: number; cfg?: number; top_k?: number; temperature?: number; cot_mode?: "full" | "melody" | "off"; abc_score?: string; has_score?: boolean; audio?: string; exclude_styles?: string; vocal_gender?: "auto" | "female" | "male"; prompt_tokens?: number; voice_slots?: VoiceSlots; voice_snapshots?: VoiceProfile[]; audio_url: string; original_audio_url?: string | null; cover_url?: string | null; cover_error?: string | null; stems?: string[]; studio?: StudioSession; studio_imports?: StudioImport[]; studio_mixes?: { file: string; variant: string; created_at: string }[]; created_at: string; folder: string; folder_name: string };
-export type AiCapabilityStatus = { configured: boolean; enabled: boolean; provider: string };
-export type AiProviderPublic = { label: string; configured: boolean; last4: string | null; updated_at: string | null };
+export type Song = { rating?: number; id: string; title: string; artist?: string; album?: string; genre?: string; year?: string; track_number?: string; description: string; lyrics: string; english_translation?: string; lyrics_language?: string; timed_lyrics?: TimedLyrics | null; instrumental: boolean; seed: number | null; duration?: number; steps?: number; cfg?: number; top_k?: number; temperature?: number; cot_mode?: "full" | "melody" | "off"; abc_score?: string; has_score?: boolean; audio?: string; exclude_styles?: string; vocal_gender?: "auto" | "female" | "male"; prompt_tokens?: number; voice_slots?: VoiceSlots; voice_snapshots?: VoiceProfile[]; audio_url: string; original_audio_url?: string | null; cover_url?: string | null; cover_error?: string | null; stems?: string[]; studio?: StudioSession; studio_imports?: StudioImport[]; studio_mixes?: { file: string; variant: string; created_at: string }[]; created_at: string; folder: string; folder_name: string };
+export type AiCapabilityStatus = { configured: boolean; enabled: boolean; provider: string; model?: string };
+export type AiProviderPublic = { label: string; configured: boolean; last4: string | null; updated_at: string | null; base_url?: string };
 export type AiCapabilityState = { enabled: boolean; provider: string; model: string };
 export type AiKeysView = {
   version: number;
@@ -116,6 +116,7 @@ export type AiKeysView = {
 export type SoundEffectsEngineStatus = UtilityStatus & { runtime_ready?: boolean; processor?: string; size_bytes?: number; present?: number; required?: number; max_duration?: number };
 export type Status = { model: ModelStatus; cover_art: CoverArtStatus; stems: UtilityStatus; sound_effects: SoundEffectsEngineStatus & { models?: { stable: SoundEffectsEngineStatus; woosh: SoundEffectsEngineStatus } }; lyrics_sync: UtilityStatus; sheetsage?: UtilityStatus; exports: UtilityStatus; service: ServiceStatus; gpu: GpuStatus; ai?: Record<string, AiCapabilityStatus>; jobs: Job[] };
 export type LogEntry = { id: number; ts: number; level: string; logger: string; message: string };
+export type McpActivity = { id: string; at: number; tool: string; summary: string; status: "connected" | "disconnected" | "started" | "succeeded" | "failed" };
 export type ModelInstallStatus = { status: "idle" | "running" | "succeeded" | "failed" | "cancelled"; phase: string; progress: number; error?: string | null };
 export type DownloadableModel = {
   id: "yue2" | "whisper" | "cover_art" | "stems" | "sound_effects" | "sheetsage";
@@ -127,14 +128,16 @@ export type DownloadableModel = {
 };
 
 export const getStatus = () => request<Status>("/api/status");
+export const getMcpActivity = () => request<{ items: McpActivity[] }>("/api/mcp/activity");
 export const getModels = () => request<{ items: DownloadableModel[] }>("/api/models");
 export const installModel = (id: DownloadableModel["id"], token?: string) => request<{ item?: DownloadableModel }>(`/api/models/${encodeURIComponent(id)}/install`, { method: "POST", headers: token ? { "Content-Type": "application/json" } : undefined, body: token ? JSON.stringify({ token }) : undefined });
 export const cancelModelInstall = (id: DownloadableModel["id"]) => request<{ item?: DownloadableModel }>(`/api/models/${encodeURIComponent(id)}/cancel`, { method: "POST" });
 export const getAiKeys = () => request<AiKeysView>("/api/settings/ai-keys");
-export const saveAiKeys = (body: { providers?: Record<string, { key?: string; clear?: boolean }>; capabilities?: Record<string, { enabled?: boolean; provider?: string; model?: string }> }) => request<AiKeysView>("/api/settings/ai-keys", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+export const saveAiKeys = (body: { providers?: Record<string, { key?: string; base_url?: string; clear?: boolean }>; capabilities?: Record<string, { enabled?: boolean; provider?: string; model?: string }> }) => request<AiKeysView>("/api/settings/ai-keys", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 export type ChatMessage = { role: "user" | "assistant"; content: string };
 export const assistChat = (body: { messages: ChatMessage[]; language?: string; instrumental?: boolean }) => request<{ reply: string; brief: string; ready: boolean }>("/api/assist/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 export const assistWriting = (body: { action: "generate" | "optimize" | "title" | "describe" | "compose" | "effect" | "translate"; idea?: string; random?: boolean; title?: string; description?: string; lyrics?: string; language?: string; instrumental?: boolean; effect_engine?: "stable" | "woosh" }) => request<{ lyrics?: string; title?: string; description?: string; references?: string }>("/api/assist/writing", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+export const abortWriting = () => request<{ ok: boolean }>("/api/assist/abort", { method: "POST" });
 export const getVoiceProfiles = (archived = true) => request<{ items: VoiceProfile[] }>(`/api/voices?archived=${archived ? "true" : "false"}`);
 export const createVoiceProfile = (body: Partial<VoiceProfile>) => request<{ profile: VoiceProfile }>("/api/voices", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 export const updateVoiceProfile = (id: string, body: Partial<VoiceProfile>) => request<{ profile: VoiceProfile }>(`/api/voices/${encodeURIComponent(id)}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
@@ -169,6 +172,19 @@ export const bounceStudioMix = (folder: string, tracks: StudioTrackState[], vari
 export const importStudioTrack = async (folder: string, file: File) => request<{ file: string; name: string; url: string }>(`/api/library/${encodeURIComponent(folder)}/studio/import?filename=${encodeURIComponent(file.name)}`, { method: "POST", headers: { "Content-Type": file.type || "application/octet-stream" }, body: file });
 export const generateStudioSound = (folder: string, body: { prompt: string; name?: string; negative_prompt?: string; duration: number; steps?: number; sampler?: string; chunked_decode?: boolean; engine?: "stable" | "woosh"; cfg?: number; seed?: number | null }) => request<{ job: Job }>(`/api/library/${encodeURIComponent(folder)}/studio/generate-sfx`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 export const getEffects = () => request<{ items: SoundEffect[] }>("/api/effects");
+export type LocalEffectAudio = { path: string; name: string; size: number };
+export const chooseEffectAudio = () => invoke<LocalEffectAudio | null>("choose_effect_audio");
+export async function importEffectAudio(file: File | LocalEffectAudio, name: string): Promise<SoundEffect> {
+  if (!(file instanceof File)) {
+    const result = await invoke<SidecarHttpResult>("import_effect_audio", { filePath: file.path, name });
+    if (result.status < 200 || result.status >= 300) throw new Error(errorDetail(result.status, result.body));
+    return JSON.parse(result.body) as SoundEffect;
+  }
+  return request<SoundEffect>(`/api/effects/import?filename=${encodeURIComponent(file.name)}&name=${encodeURIComponent(name)}`, {
+    method: "POST", headers: { "Content-Type": file.type || "application/octet-stream" }, body: file,
+  });
+}
+
 export const generateEffect = (body: { prompt: string; name?: string; negative_prompt?: string; duration: number; steps?: number; sampler?: string; chunked_decode?: boolean; engine?: "stable" | "woosh"; cfg?: number; seed?: number | null }) => request<{ job: Job }>("/api/effects/generate", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 export const addEffectToStudio = (effectId: string, folder: string) => request<{ file: string; name: string; url: string; duration?: number }>(`/api/effects/${encodeURIComponent(effectId)}/add-to-studio/${encodeURIComponent(folder)}`, { method: "POST" });
 export const deleteEffect = (effectId: string) => request<{ deleted: boolean }>(`/api/effects/${encodeURIComponent(effectId)}`, { method: "DELETE" });
@@ -210,3 +226,5 @@ export const uncombineStudioTracks = (folder: string, filename: string, tracks: 
 
 export const getLyricPreferences = () => request<{ avoid: string }>("/api/settings/lyric-preferences");
 export const saveLyricPreferences = (avoid: string) => request<{ avoid: string }>("/api/settings/lyric-preferences", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ avoid }) });
+
+export const rateSong = (folder: string, rating: number) => request<{ rating: number }>(`/api/library/${encodeURIComponent(folder)}/rating`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ rating }) });

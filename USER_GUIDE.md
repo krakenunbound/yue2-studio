@@ -1,6 +1,6 @@
 # YuE2 Studio user guide
 
-For version 0.6.2. Start with the quick start, then use the section for the task you want to do. The README gallery uses older screenshots; some controls have changed. Release notes: [CHANGELOG.md](CHANGELOG.md).
+For version 0.7.0. Start with the quick start, then use the section for the task you want to do. The README gallery uses older screenshots; some controls have changed. Release notes: [CHANGELOG.md](CHANGELOG.md).
 
 ## Contents
 
@@ -8,6 +8,7 @@ For version 0.6.2. Start with the quick start, then use the section for the task
 - [Installation, updates and models](#installation-updates-and-models)
 - [Create: writing and generating songs](#create-writing-and-generating-songs)
 - [Library: organizing finished work](#library-organizing-finished-work)
+- [Live: random station](#live-random-station)
 - [Effects: generating sounds](#effects-generating-sounds)
 - [Studio: arranging and mixing](#studio-arranging-and-mixing)
 - [Lyrics synchronization and karaoke](#lyrics-synchronization-and-karaoke)
@@ -66,6 +67,8 @@ YuE2 wants a compact comma-separated **style** string, not a long caption and no
 
 Start with one coherent style. Change one major instruction at a time when comparing results. Contradictory descriptions, many unrelated styles, or demands for several different arrangements make evaluation harder.
 
+There are **42** style templates (the original 25 plus trap, drill, boom bap, pop rap, Latin pop, corridos, reggae, soul R&B, gospel, cafe bossa nova, contemporary folk, heroic trailer cue, fantasy adventure cue, bedtime lullaby, cute character theme, 80s hair band, and 80s techno). Each has a thumbnail in Easy mode, the template browser, and Live.
+
 ### Your lyric avoid list
 
 Click **Avoid in lyrics** below the Easy-mode idea box or beside the Custom-mode lyric buttons. Both open the same saved list. Enter one word, phrase or writing habit per line, then click **Save avoid list**. Slash-separated alternatives and phrase patterns with blanks can also be described. Clear the field and save to disable the list.
@@ -77,6 +80,8 @@ The saved list is included as a mandatory instruction with lyric generation, rew
 Use the lyrics field for words to be sung and song-section tags such as `[Verse]` and `[Chorus]`. **Prepare pasted lyrics** formats pasted material for YuE2; review the result. The app moves performance directions into the music description rather than leaving arbitrary directions in the sung text.
 
 **Generate Lyrics** writes new text with the optional writing helper. **Optimize** rewrites existing lyrics. Neither is Whisper transcription or timing. Check the words before accepting a rewrite.
+
+After a vocal song finishes (and its thumbnail), Studio automatically runs **lyric sync** with Whisper so karaoke timing is ready. Instrumentals skip this. **Re-sync lyrics** in the song menu still works if you change the words later.
 
 Choose the lyrics language correctly. An **English translation** is display-only: it is saved for review/karaoke, not sent to YuE2 to be sung. Keep translated lines aligned with the sung lines.
 
@@ -98,6 +103,15 @@ Library is the main list of songs and exported Studio mixes. Click the cover **p
 ## Radio: listen like a station
 
 **Radio** is a built-in player for songs you already made. Pick **All songs**, a **playlist**, or a **workspace**. Controls include play/pause, previous/next, seek, volume, shuffle and repeat (off / all / one). A 10-band EQ with presets (Flat, Bass, Treble, Vocal, Electronic, Rock, Jazz, Acoustic, Night, Loudness) is saved on this machine. Radio does not generate music; it only plays the library.
+
+## Live: automatic song maker and station
+
+**Live** is for hands-free song generation first; broadcasting or streaming the result is optional. Start it when you want YuE2 Studio to keep making varied songs for you while you listen, browse the library, or leave the station running. It draws a template and a cast at random: instrumental, female, male, mixed duet, or same-gender duo (two different characters). Vocal draws use the configured Writing helper to write a **title and lyrics**, then assign matching character voices. Catalog songs fill the first buffer; new generations keep it topped up. Vocal songs sync lyrics automatically. Odd template combinations are allowed. Use **Start live** / **Stop**. Create and Live share the same YuE2 worker.
+
+Live maintains a 3, 5, or 8-song ready-ahead buffer. It prepares the next song while one is generating, so it can use cloud-writing requests continuously when a cloud provider is selected. Choose Local LLM in **KEYS** if you want the same automatic workflow without cloud-writing charges, or stop Live when you have generated enough songs.
+
+Optional **Orbitwave** (Live header) draws the library as concentric spinning titles. Rings stay equally spaced and grow as songs are added. The playing title is cyan; the newest title is amber. Each ring spins; the camera slowly orbits the disc, matching the original Orbitwave view. Stars fill the frame and drift.
+
 - **Open song folder** exposes the actual files for backup or use elsewhere.
 
 Use descriptive song and effect names. Names are easier to recognize than the opening words of a long prompt. Before deleting a song, make sure it is not your only copy of a take or arrangement you want.
@@ -198,7 +212,7 @@ For a mixed song, first export it from Studio and select the new Library entry. 
 
 ## Keys, System, Jobs and Logs
 
-**Keys** configures optional cloud helpers. Save your own provider key in the appropriate category and enable that helper. Writing actions and Effects prompt enhancement use the Writing configuration. A stored key alone does not mean every helper is enabled. Review generated suggestions before applying them.
+**Keys** configures optional writing and image helpers. For cloud models, pick that provider, paste the intended key, click **Save this category**, and enable the helper. For a local model, pick **Local LLM**, enter the OpenAI-compatible server URL (this PC or another on your network, for example `http://127.0.0.1:11434/v1` or `http://192.168.x.x:11434/v1`), set the model name (`gemma3:4b`), and enable Local LLM writing. Local LLM fields only appear when that provider is selected. The dummy key `ollama` is enough. Studio sends one writing request at a time. A stored key or URL alone does not turn the helper on. Review generated suggestions before applying them.
 
 Cloud actions send the relevant request text to the configured provider and can use paid credits. Local models use your own computer. Do not include private information in a prompt unless you intend that provider to receive it.
 
@@ -231,6 +245,7 @@ The desktop app is unchanged and still uses local port 7794. On the studio PC op
 | Added sounds missing from export | Use custom mix, check mute/solo, timeline placement and export range. Quick stem exports omit imported sounds. |
 | Lyrics are absent or mistimed | Check the lyric text/language, install Whisper and run sync. A text rewrite cannot change what was actually sung. |
 | Gemini helper unavailable | Check Writing provider, model, saved key and enable state. Read the error for quota or provider problems. |
+| Local LLM writing fails | Writing → Local LLM. URL must be reachable from this PC (`/v1`). Model name must match `ollama list`. Only one request at a time. Do not port-forward 11434. |
 | Old controls still visible | Close the running app and launch the updated executable/installation. An already open window does not load a rebuilt frontend. |
 
 ## Files, backups and sharing

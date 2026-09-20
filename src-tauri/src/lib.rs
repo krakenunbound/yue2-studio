@@ -2,6 +2,8 @@
 
 use std::ffi::OsStr;
 use std::io::{BufRead, BufReader};
+#[cfg(test)]
+use std::io::Read;
 use std::net::TcpListener;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
@@ -102,6 +104,20 @@ fn sidecar_healthy() -> bool {
         && payload.get("protocol").and_then(serde_json::Value::as_u64) == Some(SIDECAR_PROTOCOL)
 }
 
+fn abort_remote_writing() {
+    use std::io::{Read, Write};
+    use std::net::{SocketAddr, TcpStream};
+    let address = SocketAddr::from(([127, 0, 0, 1], SIDECAR_PORT));
+    if let Ok(mut stream) = TcpStream::connect_timeout(&address, Duration::from_millis(400)) {
+        let _ = stream.set_write_timeout(Some(Duration::from_millis(400)));
+        let _ = stream.set_read_timeout(Some(Duration::from_millis(800)));
+        let request = b"POST /api/assist/abort HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+        let _ = stream.write_all(request);
+        let mut sink = [0u8; 256];
+        let _ = stream.read(&mut sink);
+    }
+}
+
 fn kill_process_tree(pid: u32) {
     #[cfg(target_os = "windows")]
     { let _ = hidden_command("taskkill").args(["/PID", &pid.to_string(), "/T", "/F"]).stdout(Stdio::null()).stderr(Stdio::null()).status(); }
@@ -187,6 +203,100 @@ fn sidecar_url() -> String { format!("http://{SIDECAR_HOST}:{SIDECAR_PORT}") }
 struct SidecarHttpResult {
     status: u16,
     body: String,
+}
+
+#[derive(serde::Serialize)]
+struct EffectAudioChoice {
+    path: String,
+    name: String,
+    size: u64,
+}
+
+const MAX_EFFECT_AUDIO_BYTES: u64 = 512 * 1024 * 1024;
+
+fn validate_effect_audio_file(file_path: &str) -> Result<(PathBuf, u64, String), String> {
+    let path = PathBuf::from(file_path);
+    let metadata = std::fs::metadata(&path)
+        .map_err(|error| format!("Could not read the selected sound file ({error})"))?;
+    if !metadata.is_file() {
+        return Err("Choose an audio file, not a folder or device.".into());
+    }
+    let size = metadata.len();
+    if size == 0 {
+        return Err("The selected sound file is empty.".into());
+    }
+    if size > MAX_EFFECT_AUDIO_BYTES {
+        return Err("The selected sound file is larger than the 512 MiB import limit.".into());
+    }
+    let extension = path.extension().and_then(OsStr::to_str)
+        .map(str::to_ascii_lowercase)
+        .filter(|value| matches!(value.as_str(), "wav" | "mp3" | "flac" | "m4a" | "aac" | "ogg" | "opus" | "webm"))
+        .ok_or_else(|| "Choose a WAV, MP3, FLAC, M4A, AAC, OGG, Opus, or WebM sound file.".to_string())?;
+    Ok((path, size, extension))
+}
+
+fn effect_audio_choice_from_path(path: PathBuf) -> Result<EffectAudioChoice, String> {
+    let path_text = path.display().to_string();
+    let (_, size, _) = validate_effect_audio_file(&path_text)?;
+    let name = path
+        .file_name()
+        .and_then(OsStr::to_str)
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or("Imported sound")
+        .to_string();
+    Ok(EffectAudioChoice {
+        path: path_text,
+        name,
+        size,
+    })
+}
+
+fn import_effect_audio_to_url(file_path: String, name: String, endpoint: &str) -> Result<SidecarHttpResult, String> {
+    let (path, size, _) = validate_effect_audio_file(&file_path)?;
+    let filename = path.file_name().and_then(OsStr::to_str)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "The selected sound file needs a file name.".to_string())?;
+    let file = std::fs::File::open(&path)
+        .map_err(|error| format!("Could not open the selected sound file ({error})"))?;
+    let request = ureq::post(endpoint)
+        .query("filename", filename)
+        .query("name", name.trim())
+        .set("Content-Type", "application/octet-stream")
+        .set("Content-Length", &size.to_string())
+        .timeout(SIDECAR_TIMEOUT);
+    match request.send(file) {
+        Ok(ok) => Ok(SidecarHttpResult { status: ok.status(), body: ok.into_string().unwrap_or_default() }),
+        Err(ureq::Error::Status(status, error)) => Ok(SidecarHttpResult { status, body: error.into_string().unwrap_or_default() }),
+        Err(error) => Err(format!("The local YuE2 service at {endpoint} did not answer ({error})")),
+    }
+}
+
+#[tauri::command]
+async fn choose_effect_audio() -> Result<Option<EffectAudioChoice>, String> {
+    tauri::async_runtime::spawn_blocking(|| {
+        let selected = rfd::FileDialog::new()
+            .add_filter("Audio files", &["wav", "mp3", "flac", "m4a", "aac", "ogg", "opus", "webm"])
+            .pick_file();
+        match selected {
+            None => Ok(None),
+            Some(path) => effect_audio_choice_from_path(path).map(Some),
+        }
+    })
+    .await
+    .map_err(|error| format!("The file chooser thread failed ({error})"))?
+}
+
+#[tauri::command]
+async fn import_effect_audio(file_path: String, name: String) -> Result<SidecarHttpResult, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        import_effect_audio_to_url(
+            file_path,
+            name,
+            &format!("http://{SIDECAR_HOST}:{SIDECAR_PORT}/api/effects/import"),
+        )
+    })
+    .await
+    .map_err(|error| format!("The sound import thread failed ({error})"))?
 }
 
 /// How long the host will wait on the sidecar before giving up.
@@ -336,16 +446,94 @@ pub fn run() {
             }
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![sidecar_url, sidecar_ws_url, sidecar_http, sidecar_error, open_outputs_folder])
+        .invoke_handler(tauri::generate_handler![sidecar_url, sidecar_ws_url, sidecar_http, choose_effect_audio, import_effect_audio, sidecar_error, open_outputs_folder])
         .build(tauri::generate_context!())
         .expect("error while building YuE2 Studio")
         .run(move |_app, event| {
             if matches!(event, RunEvent::ExitRequested { .. } | RunEvent::Exit) {
                 exit_shutdown.store(true, Ordering::SeqCst);
+                abort_remote_writing();
                 if let Some(mut child) = exit_sidecar.lock().unwrap().take() {
                     kill_process_tree(child.id());
                     let _ = child.wait();
                 }
             }
         });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use std::sync::mpsc;
+
+    #[test]
+    fn import_streams_binary_bytes_and_encodes_unicode_name() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let address = listener.local_addr().unwrap();
+        let (request_tx, request_rx) = mpsc::channel();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut header_bytes = Vec::new();
+            let mut byte = [0u8; 1];
+            while stream.read_exact(&mut byte).is_ok() {
+                header_bytes.push(byte[0]);
+                if header_bytes.ends_with(b"\r\n\r\n") { break; }
+            }
+            let headers = String::from_utf8(header_bytes).unwrap();
+            let content_length = headers.lines()
+                .find_map(|line| line.strip_prefix("Content-Length: "))
+                .unwrap().parse::<usize>().unwrap();
+            let mut body = vec![0u8; content_length];
+            stream.read_exact(&mut body).unwrap();
+            request_tx.send((headers, body)).unwrap();
+            stream.write_all(b"HTTP/1.1 201 Created\r\nContent-Length: 2\r\nConnection: close\r\n\r\nOK").unwrap();
+        });
+
+        let path = std::env::temp_dir().join(format!("yue2-effect-upload-{}-cafe.wav", std::process::id()));
+        let expected = vec![0, 1, 2, 255, 0, 128, 42];
+        std::fs::write(&path, &expected).unwrap();
+        let result = import_effect_audio_to_url(
+            path.display().to_string(),
+            "Café rain".to_string(),
+            &format!("http://{address}/api/effects/import"),
+        ).unwrap();
+        let (headers, body) = request_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+        server.join().unwrap();
+        std::fs::remove_file(path).unwrap();
+
+        assert_eq!(result.status, 201);
+        assert_eq!(result.body, "OK");
+        assert!(headers.starts_with("POST /api/effects/import?filename=yue2-effect-upload-"));
+        assert!(headers.contains("name=Caf%C3%A9+rain"));
+        assert_eq!(body, expected);
+    }
+
+    #[test]
+    fn effect_import_rejects_missing_and_empty_files() {
+        let missing = std::env::temp_dir().join(format!("yue2-no-effect-{}-missing.wav", std::process::id()));
+        assert!(validate_effect_audio_file(&missing.display().to_string()).is_err());
+
+        let empty = std::env::temp_dir().join(format!("yue2-no-effect-{}-empty.wav", std::process::id()));
+        std::fs::write(&empty, []).unwrap();
+        assert_eq!(
+            validate_effect_audio_file(&empty.display().to_string()).unwrap_err(),
+            "The selected sound file is empty."
+        );
+        std::fs::remove_file(empty).unwrap();
+    }
+
+    #[test]
+    fn picked_effect_keeps_the_complete_source_filename() {
+        let path = std::env::temp_dir().join(format!(
+            "yue2-effect-choice-{}-foo.bar.wav",
+            std::process::id()
+        ));
+        std::fs::write(&path, [1u8]).unwrap();
+        let choice = effect_audio_choice_from_path(path.clone()).unwrap();
+        std::fs::remove_file(path).unwrap();
+
+        assert_eq!(choice.name, format!("yue2-effect-choice-{}-foo.bar.wav", std::process::id()));
+        assert_eq!(choice.size, 1);
+    }
 }

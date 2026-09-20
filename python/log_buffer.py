@@ -4,8 +4,8 @@ import logging
 from logging.handlers import RotatingFileHandler
 import re
 import threading
-from datetime import datetime
 from collections import deque
+from datetime import datetime
 from pathlib import Path
 
 
@@ -49,6 +49,33 @@ class SafeFormatter(logging.Formatter):
         return re.sub(r"(?i)([?&](?:key|api_key|token|signature|policy|x-amz-signature|x-amz-credential|x-amz-security-token)=)[^\s&\"']+", r"\1[REDACTED]", text)
 
 
+class SessionFileHandler(RotatingFileHandler):
+    def doRollover(self) -> None:
+        if self.stream:
+            self.stream.close()
+            self.stream = None
+        source = Path(self.baseFilename)
+        if source.exists() and source.stat().st_size:
+            # Use the last write time, including the local UTC offset, so old
+            # sessions retain their actual date when archived on the next launch.
+            stamp = datetime.fromtimestamp(source.stat().st_mtime).astimezone().strftime("%Y-%m-%d_%H-%M-%S-%f%z")
+            archive = source.with_name(f"studio-{stamp}.log")
+            counter = 1
+            while archive.exists():
+                archive = source.with_name(f"studio-{stamp}-{counter}.log")
+                counter += 1
+            source.rename(archive)
+            archives = sorted(
+                (p for p in source.parent.glob("studio-*.log")
+                 if re.fullmatch(r"studio-\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}-\d{6}[+-]\d{4}(?:-\d+)?\.log", p.name)),
+                key=lambda p: (p.stat().st_mtime_ns, p.name), reverse=True,
+            )
+            for old in archives[self.backupCount:]:
+                old.unlink()
+        if not self.delay:
+            self.stream = self._open()
+
+
 def install(log_root: Path) -> None:
     log_root.mkdir(parents=True, exist_ok=True)
     ring.setFormatter(SafeFormatter("%(message)s"))
@@ -56,31 +83,13 @@ def install(log_root: Path) -> None:
     root.setLevel(logging.INFO)
     path = str((log_root / "studio.log").resolve())
     if ring not in root.handlers:
-        # Reopen the last saved log in the panel, not only in a disk file.
-        try:
-            with open(path, encoding="utf-8") as saved:
-                previous = deque(saved, maxlen=1000)
-            pending = None
-            for line in previous:
-                match = re.match(r"^\S+ \S+ (DEBUG|INFO|WARNING|ERROR|CRITICAL) ([^:]+): (.*)", line.rstrip())
-                if match:
-                    if pending is not None:
-                        ring.emit(pending)
-                    pending = logging.LogRecord(match[2], getattr(logging, match[1]), "", 0, match[3], (), None)
-                    try:
-                        pending.created = datetime.fromisoformat(line[:23].replace(",", ".")).timestamp()
-                    except ValueError:
-                        pass
-                elif pending is not None:
-                    pending.msg += "\n" + line.rstrip()
-                else:
-                    pending = logging.LogRecord("previous.session", logging.INFO, "", 0, line.rstrip(), (), None)
-            if pending is not None:
-                ring.emit(pending)
-        except FileNotFoundError:
-            pass
+        ring.clear()
         root.addHandler(ring)
     if not any(isinstance(h, RotatingFileHandler) and h.baseFilename == path for h in root.handlers):
-        handler = RotatingFileHandler(path, maxBytes=2_000_000, backupCount=3, encoding="utf-8")
+        handler = SessionFileHandler(path, maxBytes=2_000_000, backupCount=3, encoding="utf-8")
+        # Begin each process with a fresh file while retaining bounded history.
+        # Repeated installation in the same process must not discard its log.
+        if Path(path).stat().st_size:
+            handler.doRollover()
         handler.setFormatter(SafeFormatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
         root.addHandler(handler)

@@ -31,3 +31,20 @@ Every image used the same visual constraints: square editorial album-art thumbna
 - **J-pop** — Tokyo night crossing, neon and headlights, cherry-pink glow, wet asphalt.
 - **City pop** — 1980s bay at dusk, white coupe on a coastal overlook, coral sunset skyline.
 - **Top 40** — Glossy night radio studio, condenser mic and headphones, city bokeh.
+- **Atlanta trap** — Night skyline and a chrome speaker cone, dark expensive space.
+- **Brooklyn drill** — Wet Brooklyn stoop light, stalking street stillness.
+- **East Coast boom bap** — Dusty vinyl and a chrome mic against a water tower.
+- **Pop rap** — Glossy night radio desk and city glass.
+- **Latin pop** — Nylon guitar on a humid night balcony.
+- **Corridos** — Guitar and hat on a dusty pickup at dusk.
+- **Reggae** — Bass and guitar on a warm evening veranda.
+- **Soul R&B** — Rhodes and a close mic in a low-lit room.
+- **Gospel** — Empty church, organ, stained-glass dawn.
+- **Cafe bossa nova** — Nylon guitar and espresso in morning cafe light.
+- **Contemporary folk** — Acoustic guitar on a fence by an open road.
+- **Heroic trailer cue** — Canyon stone gate at sunrise.
+- **Fantasy adventure cue** — Map, compass, tavern door onto mountains.
+- **Bedtime lullaby** — Moonlit crib mobile in a small dark room.
+- **Cute character theme** — Original mascot figurine on a toy shelf.
+- **80s hair band** — Empty glam-metal stage, Marshall stacks, purple PAR cans.
+- **80s techno** — Analog drum machine and synths in a cyan warehouse.

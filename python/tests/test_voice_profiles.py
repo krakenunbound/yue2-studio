@@ -28,6 +28,10 @@ class VoiceProfileTests(unittest.TestCase):
         self.assertIn("Warm backing stack", names)
         self.assertIn("Stevie Nicks", names)
         self.assertIn("Freddie Mercury", names)
+        self.assertIn("Mariah Carey", names)
+        self.assertIn("Kurt Cobain", names)
+        self.assertIn("Robert Plant", names)
+        self.assertIn("Frank Sinatra", names)
 
     def test_stevie_persona_is_a_sound_description(self) -> None:
         profile = voice_profiles.get_profile("voice-gold-dust-mezzo")
@@ -62,6 +66,8 @@ class VoiceProfileTests(unittest.TestCase):
         assert compiled is not None
         self.assertNotIn("Stevie", compiled["block"])
         self.assertIn("Singer A (Female)", compiled["block"])
+        self.assertIn("female vocal", compiled["block"])
+        self.assertNotIn("not a generic", compiled["block"].casefold())
         self.assertIn("[Female]", " ".join(compiled["assignments"]))
 
     def test_duet_slots_compile_singer_a_and_b(self) -> None:
@@ -130,6 +136,94 @@ class VoiceProfileTests(unittest.TestCase):
         result = voice_profiles.compile_for_generation("plain description", {})
         self.assertFalse(result["applied"])
         self.assertEqual("plain description", result["description"])
+
+    def test_strip_template_singers_drops_flat_live_voice(self) -> None:
+        text = (
+            "Japanese, 1980s city pop, upbeat and danceable, groovy bass, "
+            "Singer A (Female), a warm clear mezzo with joyful Japanese phrasing, "
+            "easy upper register and unhurried city-night cool, Fully melodic, danceable verses"
+        )
+        stripped = voice_profiles.strip_template_singers(text)
+        self.assertIn("city pop", stripped)
+        self.assertIn("Fully melodic", stripped)
+        self.assertNotIn("Singer A", stripped)
+        self.assertNotIn("warm clear mezzo", stripped)
+
+    def test_assigned_male_character_replaces_template_female_singer(self) -> None:
+        description = (
+            "Japanese, 1980s city pop, upbeat and danceable, groovy bass, electric guitar, "
+            "bright synths, joyful neon-city night rather than modern J-pop or disco parody, "
+            "Singer A (Female), a warm clear mezzo with joyful Japanese phrasing, easy upper "
+            "register and unhurried city-night cool, Fully melodic, danceable verses, a memorable chorus"
+        )
+        result = voice_profiles.compile_for_generation(
+            description,
+            {"female": "", "male": "voice-liquid-falsetto", "backing": ""},
+        )
+        self.assertTrue(result["applied"])
+        preview = result["preview"]
+        self.assertIn("Singer A (Male)", preview)
+        self.assertIn("male vocal", preview)
+        self.assertIn("liquid falsetto", preview)
+        self.assertIn("city pop", preview)
+        self.assertIn("Fully melodic", preview)
+        self.assertNotIn("Singer A (Female)", preview)
+        self.assertNotIn("warm clear mezzo", preview)
+        self.assertNotIn("Prince", preview)
+
+    def test_duet_characters_replace_template_hair_band_tenor(self) -> None:
+        description = (
+            "English, 1980s glam metal hair-band rock with twin leads, "
+            "Singer A (Male), a high raspy glam-metal tenor with open vowels, a screaming-sung belt "
+            "and a memorable gang-ready hook, Sung verses with attitude"
+        )
+        result = voice_profiles.compile_for_generation(
+            description,
+            {"female": "voice-whisper-close", "male": "voice-croon-baritone", "backing": ""},
+        )
+        self.assertTrue(result["applied"])
+        preview = result["preview"]
+        self.assertIn("Singer A (Female)", preview)
+        self.assertIn("Singer B (Male)", preview)
+        self.assertIn("whisper-mezzo", preview)
+        self.assertIn("crooner baritone", preview)
+        self.assertNotIn("glam-metal tenor", preview)
+        self.assertNotIn("Billie", preview)
+        self.assertNotIn("Sinatra", preview)
+
+    def test_dark_techno_keeps_arrangement_and_replaces_generic_voice(self):
+        result = voice_profiles.compile_for_generation(
+            'English, dark techno, 130 BPM, distorted kick, industrial bass, detached female vocals, no choir',
+            {'female': 'voice-gold-dust-mezzo'})
+        text = result['description']
+        for expected in ('dark techno', '130 BPM', 'distorted kick', 'industrial bass', 'no choir', 'husky', 'grainy chest', 'slow, wide, and slightly uneven vibrato'):
+            self.assertIn(expected, text)
+        for unwanted in ('detached female', '70s rock', 'folk-rock', 'Mandatory vocal identity', 'generic model voice'):
+            self.assertNotIn(unwanted, text)
+        self.assertEqual(text.count('grainy chest'), 1)
+
+    def test_embedded_singer_preserves_other_instruments(self):
+        self.assertEqual(voice_profiles.strip_competing_vocals('dark techno with detached female vocals and pounding drums'), 'dark techno and pounding drums')
+        self.assertEqual(voice_profiles.strip_competing_vocals('industrial bass, vocal chops, no choir'), 'industrial bass, vocal chops, no choir')
+
+    def test_freeform_only_profile_keeps_traits(self):
+        phrase = voice_profiles.yue2_voice_phrase({'expanded': 'breathy alto with clipped diction'}, singer_label='Singer A')
+        self.assertIn('breathy alto', phrase)
+
+    def test_lowercase_arrangement_survives_template_singer_cleanup(self):
+        result = voice_profiles.strip_template_singers('indie folk, Singer A (Female), warm alto, acoustic guitar, brushed drums, gentle tempo')
+        self.assertEqual(result, 'indie folk, acoustic guitar, brushed drums, gentle tempo')
+
+    def test_instrument_registers_are_not_singers(self):
+        self.assertEqual(voice_profiles.strip_competing_vocals('jazz, tenor saxophone, alto flute, baritone guitar, brushed drums'), 'jazz, tenor saxophone, alto flute, baritone guitar, brushed drums')
+
+    def test_backing_profile_does_not_request_a_lead(self):
+        profile = voice_profiles.get_profile('voice-warm-backing')
+        if profile is None:
+            profile = next(p for p in voice_profiles.list_profiles() if p['role'] == 'backing')
+        phrase = voice_profiles.yue2_voice_phrase(profile, singer_label='Backing vocals')
+        self.assertIn('backing vocal', phrase)
+        self.assertNotIn('lead vocal', phrase)
 
     def test_duplicate_is_not_built_in(self) -> None:
         copy = voice_profiles.duplicate("voice-clear-alto")

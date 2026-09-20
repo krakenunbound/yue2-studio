@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "YuE2 Studio",
-  "version": "0.6.2",
+  "version": "0.7.0",
   "identifier": "com.thekraken.yue2studio",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -18,7 +18,7 @@
       "minHeight": 720,
       "decorations": true,
       "resizable": true,
-      "dragDropEnabled": true,
+      "dragDropEnabled": false,
       "backgroundColor": "#06121C"
     }],
     "security": { "csp": null }
