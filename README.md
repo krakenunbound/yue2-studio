@@ -12,6 +12,8 @@ Read the [complete user guide](USER_GUIDE.md) for first-run setup, model choices
 
 ![Live automatically generating and queueing songs](docs/screenshots/v0.7.0/live-auto-generation.png)
 
+[Watch the Live auto-generation demo on YouTube](https://www.youtube.com/watch?v=KarSl1LAzIM&t=50s)
+
 ![Browse and play songs in the library](docs/screenshots/v0.4.0/04-library.png)
 
 ![Arrange a project in Studio](docs/screenshots/v0.4.0/08-studio.png)
