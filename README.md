@@ -10,6 +10,8 @@ Read the [complete user guide](USER_GUIDE.md) for first-run setup, model choices
 
 ![Create a song in Easy mode](docs/screenshots/v0.4.0/01-create-easy.png)
 
+![Live automatically generating and queueing songs](docs/screenshots/v0.7.0/live-auto-generation.png)
+
 ![Browse and play songs in the library](docs/screenshots/v0.4.0/04-library.png)
 
 ![Arrange a project in Studio](docs/screenshots/v0.4.0/08-studio.png)
